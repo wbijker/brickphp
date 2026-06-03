@@ -1,6 +1,11 @@
 # Composer
 /vendor/
 
+# Auto-generated source-fingerprint class, rewritten by Brick::writeHash on
+# every HMR poll and at first request (see Brick::styleVersion). Regenerated
+# on demand, so it doesn't belong in version control.
+/src/Hash.php
+
 # PHPUnit caches
 .phpunit.cache/
 .phpunit.result.cache

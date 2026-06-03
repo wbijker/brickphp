@@ -533,13 +533,20 @@ JS;
 
     /**
      * /style.css cache-buster. Reads the fingerprint hmr.php wrote into the
-     * Hash class — the normal request flow never scans the source. When Hash
-     * is still empty (fresh checkout, hmr hasn't run yet), it bootstraps once:
-     * computes sourceHash and writes Hash, so subsequent requests just read
-     * the static value.
+     * Hash class — the normal request flow never scans the source. The class
+     * file is gitignored (auto-generated), so on a fresh checkout it may not
+     * exist yet; in that case we write it BEFORE referencing Hash::$value, so
+     * the autoloader has something to find when the class is first touched.
+     * Same path handles the empty-$value bootstrap (file existed but hmr
+     * hadn't populated it).
      */
     private static function styleVersion(): string
     {
+        if (!file_exists(self::hashFile())) {
+            $hash = self::sourceHash();
+            self::writeHash($hash);
+            return $hash;
+        }
         if (Hash::$value !== '') {
             return Hash::$value;
         }
@@ -583,7 +590,12 @@ JS;
             if ($m > $max) $max = $m;
             $n++;
         }
-        return $max . ':' . $n;
+        // Append the lowercased FQCN of the entry app so two apps sharing the
+        // same library install produce distinct fingerprints (and thus distinct
+        // /style.css?h=... cache keys) even when their source trees happen to
+        // hash identically.
+        $klass = self::$current !== null ? strtolower(self::$current::class) : '';
+        return $max . ':' . $n . ':' . $klass;
     }
 
     private static function handlePost(App $entry, StateManager $state, Timings $t): void
