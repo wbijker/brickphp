@@ -33,6 +33,13 @@ class Brick
     private static float $runStart = 0.0;
 
     /**
+     * @var object|null Per-request config object injected by the consumer via Brick::run /
+     * Brick::watch. Library code reads fields like ->development, ->sourceDir, ->editorUrl
+     * dynamically; the concrete type lives in the consuming app, not the library.
+     */
+    private static ?object $config = null;
+
+    /**
      * Inline stylesheet for wireframe mode. Loaded only when the page is
      * rendered with ?wireframe=true. Keeps the original element box (so
      * margins/paddings/sizing stay intact) and overlays a dashed outline +
@@ -57,9 +64,13 @@ CSS;
      * as an error page instead of leaking xdebug's HTML.
      *
      * @param App|class-string<App> $entry
+     * @param object $config Per-app configuration object — the framework reads
+     *                       fields such as ->development, ->sourceDir, ->sourceExclude,
+     *                       ->editorUrl, ->editorHostRoot from it.
      */
-    public static function run(App|string $entry): void
+    public static function run(App|string $entry, object $config): void
     {
+        self::$config = $config;
         self::serveStaticAsset();
         self::dispatch($entry);
     }
@@ -79,7 +90,7 @@ CSS;
     {
         $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
         if ($path === '/hmr.php') {
-            self::watch($entry);
+            self::watch($entry, self::$config);
             return;
         }
         self::doRun($entry);
@@ -159,8 +170,8 @@ CSS;
             // covers the OLD/NEW rebuilds. Captured paths are rewritten
             // through host_root so they survive the container boundary when
             // the dev's editor opens the link.
-            UIElement::$captureSource = Config::$development;
-            if (Config::$development) {
+            UIElement::$captureSource = self::$config->development;
+            if (self::$config->development) {
                 UIElement::$sourceRoot = rtrim(dirname($_SERVER['SCRIPT_FILENAME'] ?? '', 2), '/');
                 UIElement::$hostRoot = rtrim(self::editorHostRoot() ?? UIElement::$sourceRoot, '/');
             }
@@ -193,16 +204,17 @@ CSS;
      *
      *   Brick::watch(NewsApp::class);
      *
-     * Config-aware via the static Config (no config file): when
-     * Config::$development is off it short-circuits. While polling it walks
-     * the source (sourceHash); on a change it rewrites Hash and tells the
-     * client to reload. Writing Hash at the start also catches edits made
-     * while no poll was running.
+     * Config-aware via the injected config: when $config->development is off
+     * it short-circuits. While polling it walks the source (sourceHash); on a
+     * change it rewrites Hash and tells the client to reload. Writing Hash at
+     * the start also catches edits made while no poll was running.
      *
      * @param App|class-string<App> $entry
+     * @param object $config See {@see run()} — same shape.
      */
-    public static function watch(App|string $entry): void
+    public static function watch(App|string $entry, object $config): void
     {
+        self::$config = $config;
         if (is_string($entry)) {
             $entry = new $entry();
         }
@@ -214,7 +226,7 @@ CSS;
 
         // Production short-circuit — the client only polls in dev, but a
         // direct hit shouldn't burn worker time when HMR is off.
-        if (!Config::$development) {
+        if (!self::$config->development) {
             echo json_encode(['changed' => false]);
             return;
         }
@@ -391,7 +403,7 @@ CSS;
      */
     public static function isDevelopment(): bool
     {
-        return Config::$development;
+        return self::$config->development;
     }
 
     /**
@@ -400,7 +412,7 @@ CSS;
      */
     public static function editorUrlTemplate(): string
     {
-        return Config::$editorUrl;
+        return self::$config->editorUrl;
     }
 
     /**
@@ -411,7 +423,7 @@ CSS;
      */
     public static function editorHostRoot(): ?string
     {
-        $v = Config::$editorHostRoot;
+        $v = self::$config->editorHostRoot;
         return ($v !== null && $v !== '') ? $v : null;
     }
 
@@ -565,11 +577,11 @@ JS;
     public static function sourceHash(): string
     {
         $configDir = dirname($_SERVER['SCRIPT_FILENAME'] ?? '');
-        $root = Config::$sourceDir;
+        $root = self::$config->sourceDir;
         if ($root === '' || $root[0] !== '/') {
             $root = $configDir . '/' . $root;
         }
-        $skip = array_flip(Config::$sourceExclude);
+        $skip = array_flip(self::$config->sourceExclude);
         // Never fingerprint our own generated Hash class — writing it would
         // bump its mtime and falsely trip the next change check (reload loop).
         $skip['Hash.php'] = true;
