@@ -202,6 +202,17 @@ class Unit extends Property
     }
 
     /**
+     * Em units (relative to the element's own font size).
+     */
+    public static function em(float $value): static
+    {
+        /** @var array<string, static> */
+        static $cache = [];
+        $key = (string) $value;
+        return $cache[$key] ??= new static('[' . $value . 'em]');
+    }
+
+    /**
      * Viewport-height units. Use for full-screen layouts:
      *   ->minHeight(Unit::vh(100))   // sticky-footer outer column
      */

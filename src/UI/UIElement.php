@@ -18,6 +18,7 @@ use BrickPHP\Events\WheelEvent;
 use BrickPHP\Events\Events;
 use BrickPHP\Events\EventPhase;
 use BrickPHP\Events\EventRegistration;
+use BrickPHP\Events\Key;
 use BrickPHP\State\StateManager;
 use BrickPHP\VNode\Component;
 use BrickPHP\VNode\Node;
@@ -397,28 +398,59 @@ class UIElement extends Node
     // Keyboard Events
     // ============================================================
 
-    /** @param callable(KeyboardEvent): void $callback */
-    public function onKeyDown(callable $callback, EventPhase $phase = EventPhase::Bubble, bool $client = true): static
+    /**
+     * @param callable(KeyboardEvent): void $callback
+     * @param array<Key|string> $keys When non-empty, the handler fires — and
+     *   only then round-trips to the server — solely for these keys. The match
+     *   is done on the client against `KeyboardEvent.key`, so every other key
+     *   is ignored without a server request. Pass {@see Key} cases (e.g.
+     *   `[Key::Enter, Key::Escape]`) or raw `KeyboardEvent.key` strings.
+     */
+    public function onKeyDown(callable $callback, array $keys = [], EventPhase $phase = EventPhase::Bubble, bool $client = true): static
     {
-        $this->dom()->on(Events::KEY_DOWN, $callback, null, null, $phase, $client);
+        $this->dom()->on(Events::KEY_DOWN, $callback, null, null, $phase, $client, self::keyValues($keys));
         return $this;
     }
 
-    /** @param callable(KeyboardEvent): void $callback */
-    public function onKeyUp(callable $callback, EventPhase $phase = EventPhase::Bubble, bool $client = true): static
+    /**
+     * @param callable(KeyboardEvent): void $callback
+     * @param array<Key|string> $keys See {@see onKeyDown()} — client-side key filter.
+     */
+    public function onKeyUp(callable $callback, array $keys = [], EventPhase $phase = EventPhase::Bubble, bool $client = true): static
     {
-        $this->dom()->on(Events::KEY_UP, $callback, null, null, $phase, $client);
+        $this->dom()->on(Events::KEY_UP, $callback, null, null, $phase, $client, self::keyValues($keys));
         return $this;
+    }
+
+    /**
+     * Normalise a key list to the `KeyboardEvent.key` strings the client filter
+     * compares against. Accepts {@see Key} cases or raw strings interchangeably.
+     *
+     * @param array<Key|string> $keys
+     * @return string[]
+     */
+    private static function keyValues(array $keys): array
+    {
+        return array_values(array_map(
+            static fn(Key|string $k): string => $k instanceof Key ? $k->value : $k,
+            $keys,
+        ));
     }
 
     // ============================================================
     // Form / Input Events
     // ============================================================
 
-    /** @param callable(InputEvent): void $callback */
-    public function onChange(callable $callback, EventPhase $phase = EventPhase::Bubble, bool $client = true): static
+    /**
+     * @param callable(InputEvent): void $callback
+     * @param array<Key|string> $keys Client-side key filter (see {@see onKeyDown()}).
+     *   Note a `change` event carries no key, so the filter only has an effect
+     *   when the underlying event provides one — for true key filtering use
+     *   onKeyDown()/onKeyUp().
+     */
+    public function onChange(callable $callback, array $keys = [], EventPhase $phase = EventPhase::Bubble, bool $client = true): static
     {
-        $this->dom()->on(Events::CHANGE, $callback, null, null, $phase, $client);
+        $this->dom()->on(Events::CHANGE, $callback, null, null, $phase, $client, self::keyValues($keys));
         return $this;
     }
 

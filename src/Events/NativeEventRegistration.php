@@ -9,8 +9,8 @@ use BrickPHP\Js\Js;
  * native events flow through the same add/remove lifecycle as custom ones —
  * no inline `on<event>` attributes.
  *
- * add() binds `Brick.bindEvent(path, domType, event, capture)`; remove()
- * unbinds it. When remove() fires because the handler was dropped from a
+ * add() binds `Brick.bindEvent(path, domType, event, capture, client, keys)`;
+ * remove() unbinds it. When remove() fires because the handler was dropped from a
  * surviving element it does the real detach; when it fires because the node
  * itself left the tree the element is already gone, so the emitted unbind is
  * a harmless no-op (the browser drops the listeners with the node and the
@@ -24,14 +24,20 @@ use BrickPHP\Js\Js;
  * the current behaviour — an AJAX POST that diff/patches the current page;
  * false makes the listener submit a real form POST, a full-page navigation
  * the server answers with a freshly rendered HTML document.
+ *
+ * `$keys` is an optional client-side key filter for keyboard events: the
+ * listener only dispatches when `KeyboardEvent.key` is one of these values, so
+ * unwanted keys never round-trip. Empty means "every key" (the default).
  */
 final class NativeEventRegistration implements EventRegistration
 {
+    /** @param string[] $keys */
     public function __construct(
         private string     $event,
         private string     $domType,
         private EventPhase $phase,
         private bool       $client = true,
+        private array      $keys = [],
     ) {
     }
 
@@ -49,6 +55,7 @@ final class NativeEventRegistration implements EventRegistration
             Js::str($this->event),
             $this->phase->useCapture(),
             $this->client,
+            $this->keys,
         ));
     }
 

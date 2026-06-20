@@ -922,7 +922,7 @@ var Brick = (function() {
     // patch; false makes the listener submit a full-page form POST. Tracked on
     // the element (keyed by domType+phase) so it can be unbound and is never
     // double-bound.
-    function bindEvent(path, domType, event, capture, client) {
+    function bindEvent(path, domType, event, capture, client, keys) {
         var el = findNodeByPath(path);
         if (!el) return;
         el.__brickEvents = el.__brickEvents || {};
@@ -933,7 +933,13 @@ var Brick = (function() {
         // value, not a derived one. A prior version derived a `serverNav` here
         // and passed it through, which inverted the semantics (client=true
         // pages went to submitForm and vice versa).
-        var fn = function (evt) { handleEvent(evt, event, el, client); };
+        var fn = function (evt) {
+            // Client-side key filter: when a key list is given, only react to a
+            // matching KeyboardEvent.key — other keys are dropped here and never
+            // round-trip. Events that carry no `key` (e.g. change) are exempt.
+            if (keys && keys.length && evt && typeof evt.key === 'string' && keys.indexOf(evt.key) < 0) return;
+            handleEvent(evt, event, el, client);
+        };
         el.addEventListener(domType, fn, capture);
         el.__brickEvents[key] = fn;
     }

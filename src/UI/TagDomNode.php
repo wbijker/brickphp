@@ -195,14 +195,20 @@ class TagDomNode extends DomNode
      * their own. There are no inline on<event> attributes — all wiring is
      * imperative JS keyed on the node's path.
      */
-    public function on(string $event, callable $callback, ?Component $owner = null, ?EventRegistration $registration = null, EventPhase $phase = EventPhase::Bubble, bool $client = true): static
+    /**
+     * @param string[] $keys For keyboard events, the `KeyboardEvent.key` values
+     *   the handler is restricted to. Empty = every key. The filtering happens
+     *   client-side (see NativeEventRegistration), so non-matching keys never
+     *   reach the server. Ignored when an explicit $registration is supplied.
+     */
+    public function on(string $event, callable $callback, ?Component $owner = null, ?EventRegistration $registration = null, EventPhase $phase = EventPhase::Bubble, bool $client = true, array $keys = []): static
     {
         // Normalize any callable shape (string, [obj,'method'], invokable
         // object, first-class callable) into a Closure at the DOM-node
         // boundary so every downstream consumer can rely on a uniform
         // type when storing and dispatching the handler.
         $closure = $callback instanceof \Closure ? $callback : \Closure::fromCallable($callback);
-        $registration ??= new NativeEventRegistration($event, self::DOM_EVENT_MAP[$event] ?? $event, $phase, $client);
+        $registration ??= new NativeEventRegistration($event, self::DOM_EVENT_MAP[$event] ?? $event, $phase, $client, $keys);
         $this->events[$event] = ['callback' => $closure, 'owner' => $owner, 'registration' => $registration];
         return $this;
     }

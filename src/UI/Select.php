@@ -2,53 +2,62 @@
 
 namespace BrickPHP\UI;
 
+use BrickPHP\State\StateManager;
+use BrickPHP\VNode\RenderPhase;
+use BrickPHP\VNode\VNode;
+
 /**
  * Select dropdown element.
+ *
+ * Options (and the form attributes below) are applied straight onto the
+ * underlying dom node so they survive the VNode render pass: the live pipeline
+ * calls {@see render()}, which returns the dom node directly and never calls
+ * {@see build()}. Re-deriving the option children on every render (clearing
+ * first) keeps the element idempotent across patches.
  */
 class Select extends UIElement
 {
+    /** @var (Option|Optgroup)[] */
+    protected array $options = [];
+
     public function __construct()
     {
         parent::__construct('select');
     }
 
-    protected ?string $name = null;
-    protected ?string $id = null;
-    protected bool $required = false;
-    protected bool $disabled = false;
-    protected bool $multiple = false;
-    protected ?int $size = null;
-    protected ?string $autocomplete = null;
-    /** @var (Option|Optgroup)[] */
-    protected array $options = [];
-
     public function name(string $name): static
     {
-        $this->name = $name;
+        $this->dom()->attr('name', $name);
         return $this;
     }
 
     public function id(string $id): static
     {
-        $this->id = $id;
+        $this->dom()->attr('id', $id);
         return $this;
     }
 
     public function required(bool $required = true): static
     {
-        $this->required = $required;
+        if ($required) {
+            $this->dom()->attr('required', 'required');
+        }
         return $this;
     }
 
     public function disabled(bool $disabled = true): static
     {
-        $this->disabled = $disabled;
+        if ($disabled) {
+            $this->dom()->attr('disabled', 'disabled');
+        }
         return $this;
     }
 
     public function multiple(bool $multiple = true): static
     {
-        $this->multiple = $multiple;
+        if ($multiple) {
+            $this->dom()->attr('multiple', 'multiple');
+        }
         return $this;
     }
 
@@ -58,13 +67,13 @@ class Select extends UIElement
      */
     public function visibleRows(int $rows): static
     {
-        $this->size = $rows;
+        $this->dom()->attr('size', (string)$rows);
         return $this;
     }
 
     public function autocomplete(string $value): static
     {
-        $this->autocomplete = $value;
+        $this->dom()->attr('autocomplete', $value);
         return $this;
     }
 
@@ -86,40 +95,22 @@ class Select extends UIElement
 
     public function build(): DomNode
     {
-        $node = $this->dom()->setTag('select');
+        $this->syncOptions();
+        return parent::build();
+    }
 
-        if ($this->name !== null) {
-            $node->attr('name', $this->name);
-        }
+    public function render(StateManager $state, ?VNode $parent = null, RenderPhase $phase = RenderPhase::Initial): DomNode
+    {
+        $this->syncOptions();
+        return parent::render($state, $parent, $phase);
+    }
 
-        if ($this->id !== null) {
-            $node->attr('id', $this->id);
-        }
-
-        if ($this->required) {
-            $node->attr('required', 'required');
-        }
-
-        if ($this->disabled) {
-            $node->attr('disabled', 'disabled');
-        }
-
-        if ($this->multiple) {
-            $node->attr('multiple', 'multiple');
-        }
-
-        if ($this->size !== null) {
-            $node->attr('size', (string)$this->size);
-        }
-
-        if ($this->autocomplete !== null) {
-            $node->attr('autocomplete', $this->autocomplete);
-        }
-
+    /** (Re)build the <option>/<optgroup> children on the dom node. */
+    private function syncOptions(): void
+    {
+        $this->dom()->clearChildren();
         foreach ($this->options as $option) {
-            $node->children($option->toNode());
+            $this->dom()->children($option->toNode());
         }
-
-        return $node;
     }
 }
