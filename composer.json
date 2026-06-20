@@ -1,5 +1,5 @@
 {
-    "name": "brickphp/brickphp",
+    "name": "itecho/brickphp",
     "type": "library",
     "description": "Server-powered web applications, built brick by brick — entirely in PHP. No JavaScript framework, no build pipeline, no Node.",
     "keywords": ["framework", "server-driven", "components", "ui", "no-js", "hmr", "ssr"],
