@@ -33,28 +33,10 @@ class Brick
     private static float $runStart = 0.0;
 
     /**
-     * @var object|null Per-request config object injected by the consumer via Brick::run /
-     * Brick::watch. Library code reads fields like ->development, ->sourceDir, ->editorUrl
-     * dynamically; the concrete type lives in the consuming app, not the library.
+     * Per-request config injected by the consumer via Brick::run / Brick::watch.
+     * Always set by run()/watch() before any read.
      */
-    private static ?object $config = null;
-
-    /**
-     * Inline stylesheet for wireframe mode. Loaded only when the page is
-     * rendered with ?wireframe=true. Keeps the original element box (so
-     * margins/paddings/sizing stay intact) and overlays a dashed outline +
-     * a small top-left tag with the construct/component name. The image
-     * placeholder uses two CSS gradients to draw the classic crossed-out
-     * rectangle so a sized <img> turns into a same-sized X box.
-     */
-    private const WIREFRAME_CSS = <<<'CSS'
-.brick-wf{outline:1px dashed rgba(60,80,120,0.45);outline-offset:-1px;position:relative;}
-.brick-wf-label{position:absolute;top:0;left:0;z-index:9999;font:10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;background:#ffec99;color:#222;padding:2px 5px;pointer-events:none;border-bottom-right-radius:3px;white-space:nowrap;letter-spacing:.02em;}
-.brick-wf-img{background:
-  linear-gradient(to top right,transparent calc(50% - 1px),rgba(60,80,120,0.4) 50%,transparent calc(50% + 1px)),
-  linear-gradient(to top left,transparent calc(50% - 1px),rgba(60,80,120,0.4) 50%,transparent calc(50% + 1px));min-height:32px;}
-.brick-wf-hover{background-color:rgba(255,235,100,0.45) !important;}
-CSS;
+    private static Config $config;
 
     /**
      * Entry point. Accepts either an instantiated App or its class
@@ -64,11 +46,9 @@ CSS;
      * as an error page instead of leaking xdebug's HTML.
      *
      * @param App|class-string<App> $entry
-     * @param object $config Per-app configuration object — the framework reads
-     *                       fields such as ->development, ->sourceDir, ->sourceExclude,
-     *                       ->editorUrl, ->editorHostRoot from it.
+     * @param Config $config Per-app configuration.
      */
-    public static function run(App|string $entry, object $config): void
+    public static function run(App|string $entry, Config $config): void
     {
         self::$config = $config;
         self::serveStaticAsset();
@@ -210,9 +190,9 @@ CSS;
      * the start also catches edits made while no poll was running.
      *
      * @param App|class-string<App> $entry
-     * @param object $config See {@see run()} — same shape.
+     * @param Config $config See {@see run()} — same shape.
      */
-    public static function watch(App|string $entry, object $config): void
+    public static function watch(App|string $entry, Config $config): void
     {
         self::$config = $config;
         if (is_string($entry)) {
@@ -883,12 +863,6 @@ JS;
         $ui->bindEvents();
         $t->mark('bind events');
 
-        $stateJs = $state->getClientJs();
-
-        // Collect custom JS / inline CSS registered by components.
-        $inlineScripts = implode("\n", $entry->getScriptsInline());
-        $inlineStyles = implode("\n", $entry->getStylesInline());
-
         $stateHash = self::computeStateHash($state);
         $styleHash = self::styleVersion();
         $t->mark('compute hash');
@@ -916,67 +890,7 @@ JS;
             }
         }
 
-        $head = (new TagDomNode('head'))
-            ->content(
-                (new TagDomNode('meta'))->attr('charset', 'UTF-8'),
-                (new TagDomNode('meta'))->attr('name', 'viewport')->attr('content', 'width=device-width, initial-scale=1.0'),
-                (new TagDomNode('title'))->rawContent(htmlspecialchars($entry->title())),
-                // Declared so browsers don't blindly probe /favicon.ico on
-                // every page (which would rewrite to index.php and force a
-                // full app render for an icon poll). Served as a static file
-                // from /favicon.ico via Apache's `!-f` guard.
-                (new TagDomNode('link'))->attr('rel', 'icon')->attr('type', 'image/x-icon')->attr('href', '/favicon.ico'),
-                (new TagDomNode('script'))->rawContent($bootJs),
-                // /style.css bundles preflight + the extracted utility rules
-                // (in that order, so application rules win).
-                (new TagDomNode('link'))->attr('rel', 'stylesheet')->attr('href', '/style.css?h=' . $styleHash),
-            );
-
-        // User-registered external stylesheets — placed after /style.css so
-        // their rules can override framework defaults.
-        foreach ($entry->getStyles() as $href) {
-            $head->content((new TagDomNode('link'))->attr('rel', 'stylesheet')->attr('href', $href));
-        }
-        // User inline styles after externals, so they override.
-        if ($inlineStyles !== '') {
-            $head->content((new TagDomNode('style'))->rawContent($inlineStyles));
-        }
-
-        // Framework runtime first so Brick.* is available to user scripts.
-        $head->content((new TagDomNode('script'))->attr('src', '/brick.js')->rawContent(''));
-        foreach ($entry->getScripts() as $script) {
-            $tag = (new TagDomNode('script'))->attr('src', $script['src']);
-            if ($script['defer']) {
-                $tag->attr('defer', 'defer');
-            }
-            $head->content($tag->rawContent(''));
-        }
-        if ($inlineScripts !== '') {
-            $head->content((new TagDomNode('script'))->rawContent($inlineScripts));
-        }
-
-        if ($wireframe) {
-            $head->content((new TagDomNode('style'))->rawContent(self::WIREFRAME_CSS));
-        }
-
-        if ($stateJs !== null) {
-            $head->content((new TagDomNode('script'))->rawContent($stateJs));
-
-            // After a full-page (client=false) navigation, the server already
-            // applied the event to client-side state — push it into storage so
-            // the localStorage/sessionStorage manager reflects the change
-            // instead of reloading the pre-event value. Runs right after the
-            // handler is registered; server-side managers return null here and
-            // emit nothing.
-            if ($pushClientState) {
-                $clientState = $state->getClientState();
-                if ($clientState !== null) {
-                    $head->content((new TagDomNode('script'))->rawContent(
-                        'Brick.setAll(' . json_encode($clientState) . ');'
-                    ));
-                }
-            }
-        }
+        $head = (new Head($entry, $state, $bootJs, $styleHash, $wireframe, $pushClientState))->build();
 
         $body = (new TagDomNode('body'))
             ->attr('style', 'margin: 0; font-family: system-ui, -apple-system, sans-serif;')
