@@ -1035,18 +1035,35 @@ var Brick = (function() {
 // Dev-only HMR: long-poll /hmr.php; on a detected .php change, reload.
 // Gated on window.__BRICK_DEV, which the server sets from config.php
 // (development => true|false). When false, no polling happens at all.
+//
+// Polling is CHAINED, not interval-driven: the next poll is issued only when
+// the previous one resolves. A fixed setInterval would race the server's ~60s
+// hold and abort the in-flight request mid-response — if that response was the
+// `{changed:true}` for a save, the reload is lost AND the next poll re-baselines
+// against the already-changed source, so the edit is never seen again (HMR
+// silently sticks). Chaining keeps exactly one poll in flight with no gap, so
+// every change is observed and the only abort is on navigation.
 (function () {
     if (!window.__BRICK_DEV) return;
     var ctl;
+    var retry;
     function poll() {
-        if (ctl) ctl.abort();
         ctl = new AbortController();
         fetch('/hmr.php', { signal: ctl.signal, cache: 'no-store' })
             .then(function (r) { return r.json(); })
-            .then(function (j) { if (j && j.changed) location.reload(); })
-            .catch(function () { /* aborted or network error */ });
+            .then(function (j) {
+                if (j && j.changed) { location.reload(); return; }
+                poll(); // no change after the server's hold — re-poll immediately
+            })
+            .catch(function () {
+                // Navigation abort, server restart, or network blip. Back off
+                // briefly and retry so HMR self-heals once the server returns.
+                retry = setTimeout(poll, 1000);
+            });
     }
-    window.addEventListener('beforeunload', function () { if (ctl) ctl.abort(); });
+    window.addEventListener('beforeunload', function () {
+        if (ctl) ctl.abort();
+        if (retry) clearTimeout(retry);
+    });
     poll();
-    setInterval(poll, 60_000);
 })();
