@@ -52,6 +52,8 @@ class Brick
     {
         self::$config = $config;
         self::serveStaticAsset();
+        self::serveStyleSheet();
+        self::serveCliStatic();
         self::dispatch($entry);
     }
 
@@ -126,6 +128,124 @@ class Brick
     public static function assetPath(string $name): string
     {
         return __DIR__ . '/../assets/' . $name;
+    }
+
+    /**
+     * Cache-busting version token for a shipped runtime asset (brick.js,
+     * brick_debug.js, router.js, …). The assets are served with a one-year
+     * immutable Cache-Control, so their URLs must carry a version that changes
+     * when the file does — otherwise a framework update never reaches an
+     * already-visited browser. Keyed on the file's mtime; falls back to '0'
+     * when the file is missing. serveStaticAsset matches on the URL path only,
+     * so the ?v= suffix is transparent to it.
+     */
+    public static function assetVersion(string $name): string
+    {
+        $mtime = @filemtime(self::assetPath($name));
+        return $mtime === false ? '0' : (string) $mtime;
+    }
+
+    /**
+     * Serve the virtual /style.css endpoint: the preflight browser reset only.
+     * The application's utility rules are no longer harvested statically here —
+     * they're collected from the actual render (collectStyles) and emitted
+     * inline by {@see Head}, then kept current across patches via the POST
+     * response (see handlePost). This endpoint is now a static, cacheable
+     * reset. Referenced by the <link> tag (see Head) as /style.css?h=<version>;
+     * the browser keys its cache off the full URL, so a fresh hash forces a
+     * refetch — the response itself is marked immutable. No-ops for other paths.
+     */
+    private static function serveStyleSheet(): void
+    {
+        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+        if ($path !== '/style.css') {
+            return;
+        }
+
+        header('Content-Type: text/css; charset=utf-8');
+        header('Cache-Control: public, max-age=31536000, immutable');
+        echo "/* ==========================================================================\n";
+        echo "   PREFLIGHT — browser reset (from preflight.css)\n";
+        echo "   ========================================================================== */\n\n";
+        echo file_get_contents(self::assetPath('preflight.css'));
+        exit;
+    }
+
+    /**
+     * Static-file pass-through for PHP's built-in dev server (`php -S`). Apache
+     * (the production server) serves statics natively, but the cli server pipes
+     * every request through this router script — so any URL that maps to a real
+     * file in the document root (favicon, images, user JS/CSS) must be streamed
+     * back here instead of being treated as an app route. Returning false from
+     * the router would also work, but only from the top of index.php; serving
+     * the bytes directly keeps the whole concern inside run(). No-ops outside
+     * cli-server, for '/', and for anything that isn't a real in-root file.
+     */
+    private static function serveCliStatic(): void
+    {
+        if (PHP_SAPI !== 'cli-server') {
+            return;
+        }
+        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+        if ($path === '/') {
+            return;
+        }
+
+        $docRoot = realpath($_SERVER['DOCUMENT_ROOT'] ?? dirname($_SERVER['SCRIPT_FILENAME'] ?? ''));
+        if ($docRoot === false) {
+            return;
+        }
+        // Never stream a .php file: under the cli-server router model every
+        // request enters here, so /hmr.php (and friends) must fall through to
+        // dispatch() to be EXECUTED, not readfile()'d as source. Skipping the
+        // extension also closes the obvious source-disclosure hole.
+        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php') {
+            return;
+        }
+
+        $file = realpath($docRoot . '/' . ltrim($path, '/'));
+        // Must resolve to a real file that stays within the document root —
+        // realpath collapses any ../ so a traversal can't escape the root.
+        if ($file === false || !is_file($file) || !str_starts_with($file, $docRoot . DIRECTORY_SEPARATOR)) {
+            return;
+        }
+
+        header('Content-Type: ' . self::staticMimeType($file));
+        header('Content-Length: ' . filesize($file));
+        readfile($file);
+        exit;
+    }
+
+    /**
+     * Best-effort content type for a dev-server static file. A small explicit
+     * map beats mime_content_type(), which reports text/plain for .js/.css.
+     */
+    private static function staticMimeType(string $file): string
+    {
+        static $types = [
+            'js'    => 'application/javascript; charset=utf-8',
+            'mjs'   => 'application/javascript; charset=utf-8',
+            'css'   => 'text/css; charset=utf-8',
+            'json'  => 'application/json; charset=utf-8',
+            'map'   => 'application/json; charset=utf-8',
+            'html'  => 'text/html; charset=utf-8',
+            'svg'   => 'image/svg+xml',
+            'png'   => 'image/png',
+            'jpg'   => 'image/jpeg',
+            'jpeg'  => 'image/jpeg',
+            'gif'   => 'image/gif',
+            'webp'  => 'image/webp',
+            'avif'  => 'image/avif',
+            'ico'   => 'image/x-icon',
+            'woff'  => 'font/woff',
+            'woff2' => 'font/woff2',
+            'ttf'   => 'font/ttf',
+            'otf'   => 'font/otf',
+            'wasm'  => 'application/wasm',
+            'txt'   => 'text/plain; charset=utf-8',
+        ];
+        $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+        return $types[$ext] ?? 'application/octet-stream';
     }
 
     private static function doRun(App|string $entry): void
@@ -548,6 +668,22 @@ JS;
     }
 
     /**
+     * Absolute root of the app's source tree, as seen by HMR's change walk
+     * and the /style.css extractor. Resolves the config's sourceDir: an
+     * absolute path is used verbatim, a relative one resolves against the
+     * entry script's directory (so '..' means the project root).
+     */
+    private static function sourceRoot(): string
+    {
+        $configDir = dirname($_SERVER['SCRIPT_FILENAME'] ?? '');
+        $root = self::$config->sourceDir;
+        if ($root === '' || $root[0] !== '/') {
+            $root = $configDir . '/' . $root;
+        }
+        return $root;
+    }
+
+    /**
      * Full source fingerprint: newest mtime + file count, joined with a
      * colon. The HMR change signal — it must watch every source file,
      * including ones the current request never loaded, so it walks .php and
@@ -556,11 +692,7 @@ JS;
      */
     public static function sourceHash(): string
     {
-        $configDir = dirname($_SERVER['SCRIPT_FILENAME'] ?? '');
-        $root = self::$config->sourceDir;
-        if ($root === '' || $root[0] !== '/') {
-            $root = $configDir . '/' . $root;
-        }
+        $root = self::sourceRoot();
         $skip = array_flip(self::$config->sourceExclude);
         // Never fingerprint our own generated Hash class — writing it would
         // bump its mtime and falsely trip the next change check (reload loop).
@@ -734,6 +866,11 @@ JS;
             'js' => Js::dump(),
             'patches' => $patches,
             'hash' => $newHash,
+            // Full utility CSS for the NEW tree — the DOM is exactly this tree
+            // after the patches apply, so the client can replace its dynamic
+            // sheet wholesale (no per-class dedup, no StyleGenerator logic in
+            // JS). Covers any classes introduced by newly shown components.
+            'styles' => StyleGenerator::from($newUi->collectStyles())->toStyle(),
         ];
 
         $clientState = $state->getClientState();
@@ -890,7 +1027,19 @@ JS;
             }
         }
 
-        $head = (new Head($entry, $state, $bootJs, $styleHash, $wireframe, $pushClientState))->build();
+        // Utility CSS for this page, collected from the ACTUAL render (real,
+        // fully-resolved values — no static source scan). The loader is a
+        // sibling of the app root and never part of the diff tree, so its
+        // classes are gathered here too and live in the persistent inline
+        // sheet for the whole session. Emitted inline by Head; kept current
+        // across patches via the POST response (see handlePost).
+        $appStyles = $ui->collectStyles();
+        if ($loaderDom !== null) {
+            $appStyles = array_merge($appStyles, $loaderDom->collectStyles());
+        }
+        $appCss = StyleGenerator::from($appStyles)->toStyle();
+
+        $head = (new Head($entry, $state, $bootJs, $styleHash, $appCss, $wireframe, $pushClientState))->build();
 
         $body = (new TagDomNode('body'))
             ->attr('style', 'margin: 0; font-family: system-ui, -apple-system, sans-serif;')
@@ -915,7 +1064,7 @@ JS;
         // dev page; the wireframe-only behaviour self-gates on
         // window.__BRICK_WIREFRAME (set in bootJs above).
         if ($isDev) {
-            $body->content((new TagDomNode('script'))->attr('src', '/brick_debug.js')->rawContent(''));
+            $body->content((new TagDomNode('script'))->attr('src', '/brick_debug.js?v=' . self::assetVersion('brick_debug.js'))->rawContent(''));
         }
 
         $document = (new TagDomNode('html'))

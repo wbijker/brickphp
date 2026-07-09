@@ -83,7 +83,7 @@ class Router extends Component
      */
     public static function registerAssets(App $app): void
     {
-        $app->addScript('/router.js');
+        $app->addScript('/router.js?v=' . \BrickPHP\Brick::assetVersion('router.js'));
     }
 
     /**

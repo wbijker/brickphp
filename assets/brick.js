@@ -435,6 +435,18 @@ var Brick = (function() {
         }
 
 
+        // Refresh utility styles BEFORE patching so classes on newly inserted
+        // elements are already defined when they hit the DOM (no flash of
+        // unstyled content). The server sends the full CSS for the new tree;
+        // we replace the companion sheet wholesale. The persistent base sheet
+        // (#brick-app-styles, incl. loader classes) is left untouched.
+        if (typeof data.styles === 'string') {
+            var dynSheet = document.getElementById('brick-app-styles-dyn');
+            if (dynSheet && dynSheet.textContent !== data.styles) {
+                dynSheet.textContent = data.styles;
+            }
+        }
+
         // Apply DOM patches
         if (data.patches && data.patches.length > 0) {
             // console.log("Applying patches:", data.patches);

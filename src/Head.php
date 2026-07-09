@@ -39,6 +39,7 @@ CSS;
         private StateManager $state,
         private string $bootJs,
         private string $styleHash,
+        private string $appCss,
         private bool $wireframe,
         private bool $pushClientState,
     ) {
@@ -57,9 +58,21 @@ CSS;
                 // from /favicon.ico via Apache's `!-f` guard.
                 (new TagDomNode('link'))->attr('rel', 'icon')->attr('type', 'image/x-icon')->attr('href', '/favicon.ico'),
                 (new TagDomNode('script'))->rawContent($this->bootJs),
-                // /style.css bundles preflight + the extracted utility rules
-                // (in that order, so application rules win).
+                // /style.css is now just the preflight browser reset (static,
+                // cacheable). The app's utility rules follow inline below so
+                // they override the reset.
                 (new TagDomNode('link'))->attr('rel', 'stylesheet')->attr('href', '/style.css?h=' . $this->styleHash),
+                // Utility rules collected from the actual render — real values,
+                // no static scan. This sheet is the persistent base for the
+                // session (also carries the loader's classes). brick.js never
+                // touches it.
+                (new TagDomNode('style'))->attr('id', 'brick-app-styles')->rawContent($this->appCss),
+                // Empty companion sheet that brick.js refreshes on every POST
+                // patch with the new tree's full utility CSS, so classes that
+                // only appear after an interaction get styled. Placed right
+                // after the base sheet so the cascade order stays: reset <
+                // base < dynamic < user styles.
+                (new TagDomNode('style'))->attr('id', 'brick-app-styles-dyn')->rawContent(''),
             );
 
         // User-registered external stylesheets — placed after /style.css so
@@ -74,7 +87,7 @@ CSS;
         }
 
         // Framework runtime first so Brick.* is available to user scripts.
-        $head->content((new TagDomNode('script'))->attr('src', '/brick.js')->rawContent(''));
+        $head->content((new TagDomNode('script'))->attr('src', '/brick.js?v=' . \BrickPHP\Brick::assetVersion('brick.js'))->rawContent(''));
         foreach ($this->entry->getScripts() as $script) {
             $tag = (new TagDomNode('script'))->attr('src', $script['src']);
             if ($script['defer']) {
