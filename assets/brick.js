@@ -342,9 +342,13 @@ var Brick = (function() {
         } catch (e) {
             return;
         }
-        // Use the fresh hash from this render; the stashed one is stale.
+        // Use the fresh hash + style epoch from this render; the stashed ones
+        // are stale.
         if (typeof window.__BRICK_HASH === 'string') {
             data.hash = window.__BRICK_HASH;
+        }
+        if (typeof window.__BRICK_SE === 'string') {
+            data.styleEpoch = window.__BRICK_SE;
         }
         // Bypass post() so we keep the original payload's bindings/value
         // (the new page has empty inputs that would otherwise overwrite them).
@@ -361,6 +365,163 @@ var Brick = (function() {
         };
         xhr.send(JSON.stringify(data));
     }
+
+    // ==========================================================
+    // Utility-style decoder — binary table → stylesheet.
+    // Mirrors PHP StyleCodec / StyleRegistry exactly (dictionaries below are
+    // APPEND-ONLY wire format; keep in byte-for-byte sync with StyleCodec).
+    // The server ships a base64 table — window.__BRICK_ST on load, and
+    // data.styleTable on each POST — of records whose ordinals are implicit
+    // (previous + 1, varint-gap escape). Each record decodes into a CSS rule
+    // for the ordinal's class token; #brick-styles holds them all.
+    // ==========================================================
+    var __brickRules = {};     // ordinal -> rule text
+    var __brickSheet = null;   // <style id="brick-styles">
+    var BRICK_B62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+    var BRICK_BP = { sm: '(min-width: 640px)', md: '(min-width: 768px)', lg: '(min-width: 1024px)', xl: '(min-width: 1280px)', '2xl': '(min-width: 1536px)' };
+    var BRICK_SC = { dark: '(prefers-color-scheme: dark)', light: '(prefers-color-scheme: light)' };
+    var BRICK_PS = { hover: ':hover', active: ':active', focus: ':focus', 'focus-visible': ':focus-visible', 'focus-within': ':focus-within', visited: ':visited', disabled: ':disabled', enabled: ':enabled', checked: ':checked', required: ':required', valid: ':valid', invalid: ':invalid', placeholder: '::placeholder', first: ':first-child', last: ':last-child', only: ':only-child', odd: ':nth-child(odd)', even: ':nth-child(even)', empty: ':empty' };
+    // --- wire dictionaries (mirror StyleCodec::PROPS / KEYWORDS / DECLS / PSEUDO_LIST) ---
+    var BRICK_PROPS = ['display', 'flex-direction', 'flex-wrap', 'flex-grow', 'flex-shrink',
+        'align-items', 'justify-content', 'gap',
+        'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height',
+        'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+        'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+        'background-color', 'color', 'opacity',
+        'border', 'border-width', 'border-style', 'border-color', 'border-radius',
+        'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+        'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
+        'font-size', 'font-weight', 'line-height', 'text-align', 'text-transform',
+        'box-shadow', 'cursor', 'overflow', 'overflow-x', 'overflow-y',
+        'position', 'top', 'right', 'bottom', 'left', 'z-index',
+        'object-fit', 'transform',
+        'transition-property', 'transition-duration', 'transition-timing-function',
+        'grid-template-columns', 'grid-auto-flow', 'white-space'];
+    var BRICK_KW = ['flex', 'column', 'row', 'hidden', 'auto', 'center', 'pointer', 'none',
+        'wrap', 'solid', 'uppercase', 'relative', 'absolute', 'transparent',
+        'space-between', 'all', 'contain', 'cover', 'wrap-reverse', 'baseline',
+        'stretch', 'flex-start', 'flex-end', 'ease', 'ease-in', 'ease-out',
+        'ease-in-out', 'block', 'inline-block', 'grid', 'inline-flex',
+        'underline', 'line-through', 'nowrap', 'scroll', 'visible', 'collapse',
+        'fit-content', 'min-content', 'max-content', 'bold', 'normal', 'italic'];
+    var BRICK_DECL = ['display:flex', 'flex-direction:column', 'flex-direction:row',
+        'overflow:hidden', 'cursor:pointer', 'position:relative',
+        'position:absolute', 'width:100%', 'height:100%', 'align-items:center',
+        'justify-content:center', 'justify-content:space-between',
+        'flex-wrap:wrap', 'flex-grow:1', 'flex-shrink:0', 'border:none',
+        'text-align:center', 'text-transform:uppercase',
+        'background-color:transparent', 'object-fit:contain', 'border-style:solid'];
+    // extended-pseudo ids -> CSS selector text (order = StyleCodec::PSEUDO_LIST)
+    var BRICK_PSX = [':hover', ':active', ':focus', ':focus-visible', ':focus-within', ':visited',
+        ':disabled', ':enabled', ':checked', ':required', ':valid', ':invalid',
+        '::placeholder', ':first-child', ':last-child', ':only-child',
+        ':nth-child(odd)', ':nth-child(even)', ':empty'];
+    // packed single-pseudo field values 1-6 (7 = extended list follows)
+    var BRICK_PSP = ['', ':hover', ':focus', ':active', ':focus-visible', ':disabled', ':checked'];
+    // breakpoint / scheme field values -> media conditions
+    var BRICK_BPQ = ['', '(min-width: 640px)', '(min-width: 768px)', '(min-width: 1024px)', '(min-width: 1280px)', '(min-width: 1536px)'];
+    var BRICK_SCQ = ['', '(prefers-color-scheme: dark)', '(prefers-color-scheme: light)'];
+
+    function brickToken(n) { var s = ''; do { s = BRICK_B62[n % 62] + s; n = Math.floor(n / 62); } while (n > 0); return 'c' + s; }
+    function brickHex(n) { return ('0' + n.toString(16)).slice(-2); }
+    function brickStr(b, i, len) { var s = ''; for (var k = 0; k < len; k++) s += String.fromCharCode(b[i + k]); return s; }
+    function brickTrim(s) { if (s.indexOf('.') < 0) return s; return s.replace(/0+$/, '').replace(/\.$/, ''); }
+
+    function brickSelector(prefix) {
+        if (!prefix) return { media: null, pseudo: '' };
+        // Media conditions canonicalized breakpoint-then-scheme, mirroring
+        // StyleCodec::selector, so both decode paths render identical rules.
+        var bp = null, sc = null, pseudo = '';
+        prefix.split(':').forEach(function (p) {
+            if (BRICK_BP[p]) bp = BRICK_BP[p];
+            else if (BRICK_SC[p]) sc = BRICK_SC[p];
+            else if (BRICK_PS[p]) pseudo += BRICK_PS[p];
+            else if (p.indexOf('has-[') === 0 && p.slice(-1) === ']') pseudo += ':has(' + p.slice(5, -1) + ')';
+            else if (p.indexOf('nth-[') === 0 && p.slice(-1) === ']') pseudo += ':nth-child(' + p.slice(5, -1) + ')';
+            else if (p.indexOf('not-[') === 0 && p.slice(-1) === ']') pseudo += ':not(' + p.slice(5, -1) + ')';
+        });
+        var media = [];
+        if (bp) media.push(bp);
+        if (sc) media.push(sc);
+        return { media: media.length ? '@media ' + media.join(' and ') : null, pseudo: pseudo };
+    }
+
+    // Decode a value starting at b[i]; returns { v, i }. Types mirror StyleCodec.
+    function brickValue(b, i, t) {
+        switch (t) {
+            case 1: return { v: ((b[i] << 8) | b[i + 1]) + 'px', i: i + 2 };
+            case 2: return { v: b[i] + '%', i: i + 1 };
+            case 3: return { v: b[i] + 'vh', i: i + 1 };
+            case 4: return { v: b[i] + 'vw', i: i + 1 };
+            case 5: return { v: brickTrim((b[i] / 16).toFixed(4)) + 'rem', i: i + 1 };
+            case 6: return { v: brickTrim((b[i] / 16).toFixed(4)) + 'em', i: i + 1 };
+            case 7: return { v: '#' + brickHex(b[i]) + brickHex(b[i + 1]) + brickHex(b[i + 2]), i: i + 3 };
+            case 8: return { v: 'rgba(' + b[i] + ', ' + b[i + 1] + ', ' + b[i + 2] + ', ' + brickTrim((b[i + 3] / 255).toFixed(3)) + ')', i: i + 4 };
+            case 9: return { v: brickTrim((b[i] / 100).toFixed(2)), i: i + 1 };
+            case 10: var len = b[i]; return { v: brickStr(b, i + 1, len), i: i + 1 + len };
+            case 11: var l16 = (b[i] << 8) | b[i + 1]; return { v: brickStr(b, i + 2, l16), i: i + 2 + l16 };
+            case 12: return { v: b[i] + 'px', i: i + 1 };
+            case 13: return { v: String((b[i] << 8) | b[i + 1]), i: i + 2 };
+            case 14: return { v: BRICK_KW[b[i]], i: i + 1 };
+            default: return { v: '', i: i };
+        }
+    }
+
+    function brickApplyStyleTable(b64) {
+        if (typeof b64 !== 'string' || !b64) return;
+        var bin = atob(b64), b = new Uint8Array(bin.length), k;
+        for (k = 0; k < bin.length; k++) b[k] = bin.charCodeAt(k);
+        var i = 0, prev = -1;
+        while (i < b.length) {
+            var head = b[i++];
+            var n = head & 31;
+            // ordinal: implicit previous+1, or previous+varint gap (bit 7)
+            var gap = 1;
+            if (head & 128) {
+                gap = 0;
+                var shift = 0, by;
+                do { by = b[i++]; gap |= (by & 127) << shift; shift += 7; } while (by & 128);
+            }
+            var ord = prev + gap;
+            prev = ord;
+            // selector context: packed modifier byte (bit 5) or exotic prefix (bit 6)
+            var media = null, pseudo = '';
+            if (head & 32) {
+                var m = b[i++];
+                var bp = m & 7, sc = (m >> 3) & 3, ps = (m >> 5) & 7;
+                var mq = [];
+                if (BRICK_BPQ[bp]) mq.push(BRICK_BPQ[bp]);
+                if (BRICK_SCQ[sc]) mq.push(BRICK_SCQ[sc]);
+                if (mq.length) media = '@media ' + mq.join(' and ');
+                if (ps === 7) { var c = b[i++]; for (var p = 0; p < c; p++) pseudo += BRICK_PSX[b[i++]]; }
+                else if (ps) pseudo = BRICK_PSP[ps];
+            } else if (head & 64) {
+                var pl = b[i++], pfx = brickStr(b, i, pl); i += pl;
+                var sel = brickSelector(pfx);
+                media = sel.media;
+                pseudo = sel.pseudo;
+            }
+            // declarations: 0xFE decl-dict, 0xFF inline name, else props dict
+            var decls = [];
+            for (var d = 0; d < n; d++) {
+                var pid = b[i++], prop;
+                if (pid === 254) { decls.push(BRICK_DECL[b[i++]]); continue; }
+                if (pid === 255) { var nl = b[i++]; prop = brickStr(b, i, nl); i += nl; }
+                else prop = BRICK_PROPS[pid];
+                var t = b[i++], r = brickValue(b, i, t); i = r.i;
+                decls.push(prop + ':' + r.v);
+            }
+            var rule = '.' + brickToken(ord) + pseudo + '{' + decls.join(';') + '}';
+            __brickRules[ord] = media ? media + '{' + rule + '}' : rule;
+        }
+        if (!__brickSheet) __brickSheet = document.getElementById('brick-styles');
+        if (__brickSheet) { var css = ''; for (var o in __brickRules) css += __brickRules[o]; __brickSheet.textContent = css; }
+    }
+
+    // Build the initial stylesheet at parse time (brick.js is in <head>, after
+    // the boot script that sets __BRICK_ST and before <body>), so the page's
+    // ordinal classes are styled before first paint — no flash of unstyled DOM.
+    brickApplyStyleTable(window.__BRICK_ST);
 
     function bootstrap() {
         // Re-sync the "what URL is the current DOM rendered for" marker. The
@@ -435,16 +596,13 @@ var Brick = (function() {
         }
 
 
-        // Refresh utility styles BEFORE patching so classes on newly inserted
-        // elements are already defined when they hit the DOM (no flash of
-        // unstyled content). The server sends the full CSS for the new tree;
-        // we replace the companion sheet wholesale. The persistent base sheet
-        // (#brick-app-styles, incl. loader classes) is left untouched.
-        if (typeof data.styles === 'string') {
-            var dynSheet = document.getElementById('brick-app-styles-dyn');
-            if (dynSheet && dynSheet.textContent !== data.styles) {
-                dynSheet.textContent = data.styles;
-            }
+        // Merge the new tree's binary style table into #brick-styles BEFORE
+        // patching, so ordinal classes on inserted elements are already defined
+        // when they hit the DOM (no flash of unstyled content). Ordinals are
+        // stable, so merging is additive — known ones are simply overwritten
+        // with identical rules.
+        if (typeof data.styleTable === 'string') {
+            brickApplyStyleTable(data.styleTable);
         }
 
         // Apply DOM patches
@@ -624,6 +782,11 @@ var Brick = (function() {
         if (typeof window.__BRICK_HASH === 'string') {
             data.hash = window.__BRICK_HASH;
         }
+        // Echo the style-registry epoch so a registry reset forces a reload
+        // instead of stale ordinal classes silently restyling.
+        if (typeof window.__BRICK_SE === 'string') {
+            data.styleEpoch = window.__BRICK_SE;
+        }
         data.previousPath = __brick_renderedPath;
         if (Brick.isStateEnabled()) {
             var clientState = Brick.getAll();
@@ -649,6 +812,9 @@ var Brick = (function() {
         if (bindings) data.bindings = bindings;
         if (typeof window.__BRICK_HASH === 'string') {
             data.hash = window.__BRICK_HASH;
+        }
+        if (typeof window.__BRICK_SE === 'string') {
+            data.styleEpoch = window.__BRICK_SE;
         }
         data.previousPath = __brick_renderedPath;
         if (Brick.isStateEnabled()) {

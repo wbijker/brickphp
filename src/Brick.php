@@ -11,6 +11,7 @@ use BrickPHP\Js\Js;
 use BrickPHP\State\InMemoryStateManager;
 use BrickPHP\State\StateManager;
 use BrickPHP\UI\StyleGenerator;
+use BrickPHP\UI\StyleRegistry;
 use BrickPHP\UI\TagDomNode;
 use BrickPHP\UI\UIElement;
 use BrickPHP\VNode\App;
@@ -421,6 +422,11 @@ class Brick
         }
         self::$errorRendered = true;
 
+        // The error page is self-contained: it inlines its own CSS via
+        // StyleGenerator (human selectors) and ships no style table or decoder,
+        // so class names must serialize as-is, not as ordinal tokens.
+        StyleRegistry::$emit = false;
+
         // Drop any buffered output (including xdebug's error HTML).
         while (ob_get_level() > 0) {
             ob_end_clean();
@@ -776,6 +782,18 @@ JS;
             echo json_encode(['success' => false, 'reload' => true]);
             exit;
         }
+
+        // Style-registry epoch: the client's DOM holds ordinal class tokens
+        // minted by a specific registry life (see StyleRegistry). If the
+        // registry was reset since the page rendered, those ordinals may mean
+        // different styles now — force a reload rather than silently restyle.
+        $clientEpoch = $payload['styleEpoch'] ?? null;
+        if ($clientEpoch !== null && $clientEpoch !== StyleRegistry::epoch()) {
+            ob_end_clean();
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'reload' => true]);
+            exit;
+        }
         $t->mark('verify hash');
 
         // Render the old tree, execute event, save state. If the render or
@@ -833,6 +851,12 @@ JS;
         Component::processDeleted();
         $t->mark('process deleted');
 
+        // Intern the new tree's utility classes to stable ordinals BEFORE the
+        // diff, so both patched class attributes and any inserted-subtree HTML
+        // serialize to ordinal tokens. Shipped as a table delta below.
+        $newStyles = $newUi->collectStyles();
+        StyleRegistry::registerAll($newStyles);
+
         // Diff
         $patcher = new Patcher();
         $newUi->compare($oldUi, $patcher);
@@ -866,11 +890,11 @@ JS;
             'js' => Js::dump(),
             'patches' => $patches,
             'hash' => $newHash,
-            // Full utility CSS for the NEW tree — the DOM is exactly this tree
-            // after the patches apply, so the client can replace its dynamic
-            // sheet wholesale (no per-class dedup, no StyleGenerator logic in
-            // JS). Covers any classes introduced by newly shown components.
-            'styles' => StyleGenerator::from($newUi->collectStyles())->toStyle(),
+            // Binary style table for the NEW tree (base64). The client merges
+            // these ordinal→rule entries into #brick-styles, covering any
+            // classes introduced by newly shown components. Ordinals are stable,
+            // so re-sending ones the client already has is harmless.
+            'styleTable' => StyleRegistry::tableBase64($newStyles),
         ];
 
         $clientState = $state->getClientState();
@@ -1027,19 +1051,28 @@ JS;
             }
         }
 
-        // Utility CSS for this page, collected from the ACTUAL render (real,
+        // Utility styles for this page, collected from the ACTUAL render (real,
         // fully-resolved values — no static source scan). The loader is a
         // sibling of the app root and never part of the diff tree, so its
-        // classes are gathered here too and live in the persistent inline
-        // sheet for the whole session. Emitted inline by Head; kept current
-        // across patches via the POST response (see handlePost).
+        // classes are gathered here too. Every class is interned to a stable
+        // ordinal token BEFORE toHtml runs (so serializeClasses can resolve
+        // them), then shipped as a compact binary table the client decodes into
+        // the stylesheet — no CSS text emitted here at all.
         $appStyles = $ui->collectStyles();
         if ($loaderDom !== null) {
             $appStyles = array_merge($appStyles, $loaderDom->collectStyles());
         }
-        $appCss = StyleGenerator::from($appStyles)->toStyle();
+        StyleRegistry::registerAll($appStyles);
 
-        $head = (new Head($entry, $state, $bootJs, $styleHash, $appCss, $wireframe, $pushClientState))->build();
+        // The page's ordinal→style table (the dictionaries are baked into
+        // brick.js) + the registry epoch. brick.js decodes the table into
+        // <style id="brick-styles"> on load and echoes the epoch on every POST
+        // so a registry reset triggers a clean reload instead of stale ordinals
+        // silently restyling (see StyleRegistry).
+        $bootJs .= 'window.__BRICK_ST=' . json_encode(StyleRegistry::tableBase64($appStyles)) . ';'
+                 . 'window.__BRICK_SE=' . json_encode(StyleRegistry::epoch()) . ';';
+
+        $head = (new Head($entry, $state, $bootJs, $styleHash, $wireframe, $pushClientState))->build();
 
         $body = (new TagDomNode('body'))
             ->attr('style', 'margin: 0; font-family: system-ui, -apple-system, sans-serif;')

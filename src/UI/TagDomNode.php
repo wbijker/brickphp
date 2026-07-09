@@ -430,6 +430,25 @@ class TagDomNode extends DomNode
     }
 
     /**
+     * Serialize a class list for the `class` attribute: known utility classes
+     * become their short, stable ordinal token ({@see StyleRegistry}); user
+     * classes (->class(), attr('class')) and anything not registered pass
+     * through verbatim. The client rebuilds the matching rules from the binary
+     * style table. Callers must have interned the page's styles first (Brick
+     * runs StyleRegistry::registerAll before rendering/diffing).
+     *
+     * @param string[] $classes
+     */
+    private function serializeClasses(array $classes): string
+    {
+        $out = [];
+        foreach (array_unique($classes) as $c) {
+            $out[] = StyleRegistry::tokenFor($c) ?? $c;
+        }
+        return implode(' ', $out);
+    }
+
+    /**
      * Render to HTML string.
      */
     public function toHtml(): string
@@ -448,7 +467,7 @@ class TagDomNode extends DomNode
         }
 
         if (!empty($allClasses)) {
-            $attrHtml .= ' class="' . htmlspecialchars(implode(' ', array_unique($allClasses))) . '"';
+            $attrHtml .= ' class="' . htmlspecialchars($this->serializeClasses($allClasses)) . '"';
         }
         foreach ($this->attributes as $name => $value) {
             if ($name === 'class') continue;
@@ -593,7 +612,8 @@ class TagDomNode extends DomNode
         $otherClasses = $other->classes;
         $classForced = $this->invalidated || isset($this->invalidatedAttrs['class']);
         if ($classForced || $thisClasses !== $otherClasses) {
-            $patcher->setAttribute($this->path, 'class', implode(' ', array_unique($thisClasses)));
+            // Diff on human names above; emit ordinal tokens to the client.
+            $patcher->setAttribute($this->path, 'class', $this->serializeClasses($thisClasses));
         }
 
         // This element survives — diff its own listeners (bind appeared,

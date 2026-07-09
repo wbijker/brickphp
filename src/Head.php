@@ -39,7 +39,6 @@ CSS;
         private StateManager $state,
         private string $bootJs,
         private string $styleHash,
-        private string $appCss,
         private bool $wireframe,
         private bool $pushClientState,
     ) {
@@ -58,21 +57,16 @@ CSS;
                 // from /favicon.ico via Apache's `!-f` guard.
                 (new TagDomNode('link'))->attr('rel', 'icon')->attr('type', 'image/x-icon')->attr('href', '/favicon.ico'),
                 (new TagDomNode('script'))->rawContent($this->bootJs),
-                // /style.css is now just the preflight browser reset (static,
-                // cacheable). The app's utility rules follow inline below so
-                // they override the reset.
+                // /style.css is just the preflight browser reset (static,
+                // cacheable). Utility rules follow below.
                 (new TagDomNode('link'))->attr('rel', 'stylesheet')->attr('href', '/style.css?h=' . $this->styleHash),
-                // Utility rules collected from the actual render — real values,
-                // no static scan. This sheet is the persistent base for the
-                // session (also carries the loader's classes). brick.js never
-                // touches it.
-                (new TagDomNode('style'))->attr('id', 'brick-app-styles')->rawContent($this->appCss),
-                // Empty companion sheet that brick.js refreshes on every POST
-                // patch with the new tree's full utility CSS, so classes that
-                // only appear after an interaction get styled. Placed right
-                // after the base sheet so the cascade order stays: reset <
-                // base < dynamic < user styles.
-                (new TagDomNode('style'))->attr('id', 'brick-app-styles-dyn')->rawContent(''),
+                // The app's utility rules aren't shipped as CSS text — brick.js
+                // decodes the binary style table (window.__BRICK_ST, with the
+                // shared dictionary window.__BRICK_SD) into this sheet on load,
+                // and merges patch deltas into it. Empty here; placed after the
+                // reset and before user styles so the cascade stays: reset <
+                // utilities < user styles.
+                (new TagDomNode('style'))->attr('id', 'brick-styles')->rawContent(''),
             );
 
         // User-registered external stylesheets — placed after /style.css so
