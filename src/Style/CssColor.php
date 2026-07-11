@@ -5,94 +5,161 @@ declare(strict_types=1);
 namespace BrickPHP\Style;
 
 /**
- * Named CSS color, strongly typed. This type owns its own static lookup:
- * {@see ALL} is the source of the color names, and each case is backed by the
- * NUMERIC INDEX into it — the wire byte for the codec's COLOR "index" subtype.
- * Indices 0..47 also carry a gradient palette (see StyleDefinitions::PALETTE).
+ * Named CSS colours. The enum cases are the named SPECIALS (white, …) — usable
+ * without parentheses, e.g. `CssColor::white`. Design-system FAMILY shades come
+ * from the static factories, e.g. `CssColor::gray(60)`, which return a
+ * {@see CssShade}. Both encode as the codec's COLOR "index" subtype (one byte):
+ * the 242 family shades take indices 0..241 (`familyIndex * 11 + shadeIndex`),
+ * named specials take the free slots from 242 up.
  *
- * APPEND-ONLY — the index is the wire id, so never renumber cases or reorder ALL.
+ * A shade is an HSL LIGHTNESS percent (0 = black … 100 = white), so `gray(60)`
+ * is `hsl(220, 9%, 60%)`.
  *
  * Usage:
- *   CssColor::crimson             // ->value === 28 (wire id)
- *   CssColor::currentColor->css() // 'currentColor'
+ *   CssColor::white          // a named special (no parens)
+ *   CssColor::gray(60)       // gray at 60% lightness  (→ CssShade)
+ *   CssColor::blue()         // family default, shade 50
+ *   CssColor::hex(0xFF0000)  // a non-palette hex colour (COLOR hex subtype)
  */
-enum CssColor: int implements CssDeclarationValue
+enum CssColor: int implements CssColorValue
 {
-    case red = 0;
-    case scarlet = 1;
-    case tomato = 2;
-    case coral = 3;
-    case orange = 4;
-    case amber = 5;
-    case gold = 6;
-    case yellow = 7;
-    case lime = 8;
-    case chartreuse = 9;
-    case green = 10;
-    case emerald = 11;
-    case mint = 12;
-    case teal = 13;
-    case cyan = 14;
-    case sky = 15;
-    case azure = 16;
-    case blue = 17;
-    case cobalt = 18;
-    case indigo = 19;
-    case navy = 20;
-    case violet = 21;
-    case purple = 22;
-    case grape = 23;
-    case fuchsia = 24;
-    case magenta = 25;
-    case pink = 26;
-    case rose = 27;
-    case crimson = 28;
-    case ruby = 29;
-    case salmon = 30;
-    case brown = 31;
-    case sienna = 32;
-    case chocolate = 33;
-    case khaki = 34;
-    case olive = 35;
-    case forest = 36;
-    case sea = 37;
-    case turquoise = 38;
-    case aqua = 39;
-    case denim = 40;
-    case lavender = 41;
-    case plum = 42;
-    case mauve = 43;
-    case slate = 44;
-    case gray = 45;
-    case zinc = 46;
-    case stone = 47;
-    case transparent = 48;
-    case currentColor = 49;
-    case black = 50;
-    case white = 51;
-    case grey = 52;
-    case silver = 53;
-    case maroon = 54;
+    // Named specials — COLOR-index slots after the 242 family shades (0..241).
+    case white = 242;
 
-    /** All color names, indexed by wire id. Source of truth for this type. */
-    public const ALL = [
-        'red', 'scarlet', 'tomato', 'coral', 'orange', 'amber', 'gold', 'yellow', 'lime',
-        'chartreuse', 'green', 'emerald', 'mint', 'teal', 'cyan', 'sky', 'azure', 'blue',
-        'cobalt', 'indigo', 'navy', 'violet', 'purple', 'grape', 'fuchsia', 'magenta',
-        'pink', 'rose', 'crimson', 'ruby', 'salmon', 'brown', 'sienna', 'chocolate',
-        'khaki', 'olive', 'forest', 'sea', 'turquoise', 'aqua', 'denim', 'lavender',
-        'plum', 'mauve', 'slate', 'gray', 'zinc', 'stone', 'transparent', 'currentColor',
-        'black', 'white', 'grey', 'silver', 'maroon',
+    /** 22 families in wire order → [hue, saturation%]. Shade supplies lightness. */
+    public const FAMILIES = [
+        'slate'   => [215, 16], 'gray'    => [220, 9],  'zinc'    => [240, 5],
+        'neutral' => [0, 0],    'stone'   => [25, 6],   'red'     => [0, 84],
+        'orange'  => [25, 95],  'amber'   => [38, 92],  'yellow'  => [48, 96],
+        'lime'    => [85, 78],  'green'   => [142, 71], 'emerald' => [160, 84],
+        'teal'    => [172, 66], 'cyan'    => [189, 94], 'sky'     => [199, 89],
+        'blue'    => [217, 91], 'indigo'  => [239, 84], 'violet'  => [258, 90],
+        'purple'  => [271, 81], 'fuchsia' => [292, 84], 'pink'    => [330, 81],
+        'rose'    => [350, 89],
     ];
 
-    /** The color name for this case. */
-    public function css(): string
+    /** 11 shade stops (each is an HSL lightness %). */
+    public const SHADES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+    // ---- named specials (this enum's cases) -------------------------------
+
+    /** The COLOR "index" wire byte for a named special. */
+    public function index(): int
     {
-        return self::ALL[$this->value];
+        return $this->value;
     }
 
     public function toCss(): string
     {
-        return $this->css();
+        return match ($this) {
+            self::white => 'white',
+        };
+    }
+
+    // ---- families (default shade 50) → CssShade ---------------------------
+
+    public static function slate(int $shade = 50): CssShade   { return self::shade('slate', $shade); }
+    public static function gray(int $shade = 50): CssShade    { return self::shade('gray', $shade); }
+    public static function zinc(int $shade = 50): CssShade    { return self::shade('zinc', $shade); }
+    public static function neutral(int $shade = 50): CssShade  { return self::shade('neutral', $shade); }
+    public static function stone(int $shade = 50): CssShade   { return self::shade('stone', $shade); }
+    public static function red(int $shade = 50): CssShade     { return self::shade('red', $shade); }
+    public static function orange(int $shade = 50): CssShade  { return self::shade('orange', $shade); }
+    public static function amber(int $shade = 50): CssShade   { return self::shade('amber', $shade); }
+    public static function yellow(int $shade = 50): CssShade  { return self::shade('yellow', $shade); }
+    public static function lime(int $shade = 50): CssShade    { return self::shade('lime', $shade); }
+    public static function green(int $shade = 50): CssShade   { return self::shade('green', $shade); }
+    public static function emerald(int $shade = 50): CssShade  { return self::shade('emerald', $shade); }
+    public static function teal(int $shade = 50): CssShade    { return self::shade('teal', $shade); }
+    public static function cyan(int $shade = 50): CssShade    { return self::shade('cyan', $shade); }
+    public static function sky(int $shade = 50): CssShade     { return self::shade('sky', $shade); }
+    public static function blue(int $shade = 50): CssShade    { return self::shade('blue', $shade); }
+    public static function indigo(int $shade = 50): CssShade  { return self::shade('indigo', $shade); }
+    public static function violet(int $shade = 50): CssShade  { return self::shade('violet', $shade); }
+    public static function purple(int $shade = 50): CssShade  { return self::shade('purple', $shade); }
+    public static function fuchsia(int $shade = 50): CssShade  { return self::shade('fuchsia', $shade); }
+    public static function pink(int $shade = 50): CssShade    { return self::shade('pink', $shade); }
+    public static function rose(int $shade = 50): CssShade    { return self::shade('rose', $shade); }
+
+    private static function shade(string $family, int $shade): CssShade
+    {
+        if (!in_array($shade, self::SHADES, true)) {
+            throw new \InvalidArgumentException(
+                "invalid shade $shade — expected one of " . implode(', ', self::SHADES),
+            );
+        }
+        [$hue, $sat] = self::FAMILIES[$family];
+        $familyIndex = array_search($family, array_keys(self::FAMILIES), true);
+        return new CssShade(
+            $familyIndex * count(self::SHADES) + intdiv($shade, 10),
+            "hsl($hue, $sat%, $shade%)",
+        );
+    }
+
+    // ---- non-palette hex --------------------------------------------------
+
+    /**
+     * A non-named hex colour, given as a 24-bit integer literal 0xRRGGBB —
+     * e.g. hex(0xFF0000). Encodes as the codec's COLOR hex subtype.
+     */
+    public static function hex(int $hex): CssHexColor
+    {
+        return new CssHexColor($hex);
+    }
+}
+
+/**
+ * A resolved design-system colour: a family + shade, produced by the
+ * {@see CssColor} family factories. Encodes as COLOR "index".
+ */
+final class CssShade implements CssColorValue
+{
+    public function __construct(
+        private readonly int $index,
+        private readonly string $css,
+    ) {}
+
+    public function index(): int
+    {
+        return $this->index;
+    }
+
+    public function toCss(): string
+    {
+        return $this->css;
+    }
+}
+
+/**
+ * A literal RGB hex colour, held as a 24-bit integer (0xRRGGBB). Encodes as the
+ * COLOR hex subtype; renders as '#rrggbb'.
+ */
+final class CssHexColor implements CssDeclarationValue
+{
+    public function __construct(public readonly int $rgb)
+    {
+        if ($rgb < 0 || $rgb > 0xFFFFFF) {
+            throw new \InvalidArgumentException(sprintf('hex colour out of 24-bit range: 0x%X', $rgb));
+        }
+    }
+
+    public function red(): int
+    {
+        return ($this->rgb >> 16) & 0xFF;
+    }
+
+    public function green(): int
+    {
+        return ($this->rgb >> 8) & 0xFF;
+    }
+
+    public function blue(): int
+    {
+        return $this->rgb & 0xFF;
+    }
+
+    public function toCss(): string
+    {
+        return sprintf('#%06x', $this->rgb);
     }
 }

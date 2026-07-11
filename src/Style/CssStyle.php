@@ -5,35 +5,50 @@ declare(strict_types=1);
 namespace BrickPHP\Style;
 
 /**
- * Style API — SKELETON.
+ * A collection of {@see CssClass} — the utility classes that make up an element's
+ * styling. Each declaration added becomes one atomic class whose NAME is its
+ * packed bytes, base64-encoded (see {@see CssClass}).
  *
- * A fluent builder for one CSS rule: a set of typed declarations plus (later)
- * any pseudo-class / pseudo-element wrappers. It sits ABOVE the binary codec —
- * declarations are collected as (CssProperty, value) pairs, which the codec
- * turns into wire bytes.
- *
- * Intentionally minimal — flesh out the bodies. Design notes inline.
+ *   $style = (new CssStyle())
+ *       ->add(CssProperty::display, CssStaticValue::flex)
+ *       ->add(CssProperty::padding, CssStaticValue::numeric(12, CssUnit::px));
+ *   $style->names();      // ['AQ==', '2QEM', …]
+ *   (string) $style;      // "AQ== 2QEM …"  — the HTML class attribute
  */
 final class CssStyle
 {
-    /** @var list<array{property: CssProperty, value: CssDeclarationValue}> */
-    private array $declarations = [];
+    /** @var list<CssClass> */
+    private array $classes = [];
 
-    /**
-     * Add one declaration.
-     *
-     *   $this->add(CssProperty::display, CssStaticValue::none);
-     *   $this->add(CssProperty::padding, CssStaticValue::numeric(12, CssUnit::px));
-     */
+    /** Add one declaration as its own atomic class. */
     public function add(CssProperty $property, CssDeclarationValue $value): static
     {
-        $this->declarations[] = ['property' => $property, 'value' => $value];
+        $this->classes[] = CssClass::of($property, $value);
         return $this;
     }
 
-    /** @return list<array{property: CssProperty, value: CssDeclarationValue}> */
-    public function declarations(): array
+    /** Add a pre-built class (e.g. a multi-declaration or pseudo-wrapped one). */
+    public function addClass(CssClass $class): static
     {
-        return $this->declarations;
+        $this->classes[] = $class;
+        return $this;
+    }
+
+    /** @return list<CssClass> */
+    public function classes(): array
+    {
+        return $this->classes;
+    }
+
+    /** @return list<string> the base64 class names */
+    public function names(): array
+    {
+        return array_map(static fn(CssClass $c): string => $c->name(), $this->classes);
+    }
+
+    /** The space-separated class list for an HTML `class` attribute. */
+    public function __toString(): string
+    {
+        return implode(' ', $this->names());
     }
 }
