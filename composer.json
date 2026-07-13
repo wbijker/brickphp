@@ -28,5 +28,13 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "scripts": {
+        "gen:css-tables": "php bin/gen-css-tables.php",
+        "test:css-crosscheck": "node tests/js/cross-check.mjs",
+        "test": [
+            "@php vendor/bin/phpunit",
+            "@test:css-crosscheck"
+        ]
+    }
 }
