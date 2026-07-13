@@ -6,14 +6,14 @@ namespace BrickPHP\Style;
 
 /**
  * A collection of {@see CssClass} — the utility classes that make up an element's
- * styling. Each declaration added becomes one atomic class whose NAME is its
- * packed bytes, base64-encoded (see {@see CssClass}).
+ * styling. Each declaration added becomes one atomic class whose NAME is a self-
+ * describing token chain that round-trips back to the rule (see {@see CssClass}).
  *
  *   $style = (new CssStyle())
  *       ->add(CssProperty::display, CssStaticValue::flex)
  *       ->add(CssProperty::padding, CssStaticValue::numeric(12, CssUnit::px));
- *   $style->names();      // ['AQ==', '2QEM', …]
- *   (string) $style;      // "AQ== 2QEM …"  — the HTML class attribute
+ *   $style->names();      // ['d-[flex]', 'p-[12px]', …]
+ *   (string) $style;      // "d-[flex] p-[12px] …"  — the HTML class attribute
  */
 final class CssStyle
 {

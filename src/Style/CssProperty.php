@@ -262,9 +262,69 @@ enum CssProperty: int
         '-webkit-overflow-scrolling', 'all',
     ];
 
+    /**
+     * Short self-describing class-name codes, indexed by wire id (parallel to
+     * {@see ALL}). Each code is unique and is the token used in a class name's
+     * declaration segment — `p-[12px]`, `bgc-[#fff]`. Source of truth for the
+     * alias↔property mapping the JS decoder mirrors.
+     *
+     * APPEND-ONLY — a code is part of the class-name contract; never change or
+     * reorder an existing entry.
+     */
+    public const ALIASES = [
+        'd', 'pos', 'top', 'rt', 'bot', 'lft',
+        'flt', 'clr', 'z', 'ov', 'ovx', 'ovy',
+        'vis', 'bxs', 'w', 'h', 'minw', 'maxw',
+        'minh', 'maxh', 'm', 'mt', 'mr', 'mb',
+        'ml', 'p', 'pt', 'pr', 'pb', 'pl',
+        'ins', 'ib', 'ii', 'ar', 'of', 'op',
+        'r', 'ord', 'fx', 'fxg', 'fxs', 'fxb',
+        'fxd', 'fxw', 'fxf', 'jc', 'ji', 'js',
+        'ai', 'ac', 'as', 'pi', 'pc', 'ps',
+        'gap', 'rgap', 'cgap', 'grid', 'gt', 'gtc',
+        'gtr', 'gta', 'gcol', 'grow', 'garea', 'gaf',
+        'gac', 'gar', 'c', 'font', 'ff', 'fs',
+        'fw', 'fst', 'fv', 'fss', 'lh', 'ls',
+        'ws', 'ta', 'tal', 'td', 'tdl', 'tdc',
+        'tds', 'tt', 'ti', 'tov', 'tsh', 'wsp',
+        'wb', 'ww', 'owr', 'wm', 'di', 'va',
+        'lst', 'lstt', 'lsp', 'lsi', 'ts', 'hy',
+        'wfs', 'bg', 'bgc', 'bgi', 'bgr', 'bgp',
+        'bgs', 'bga', 'bgcl', 'bo', 'bbm', 'bd',
+        'bw', 'bs', 'bc', 'bt', 'btw', 'bts',
+        'btc', 'brt', 'brw', 'brs', 'brc', 'bb',
+        'bbw', 'bbs', 'bbc', 'bl', 'blw', 'bls',
+        'blc', 'rad', 'radtl', 'radtr', 'radbr', 'radbl',
+        'bcol', 'bsp', 'bi', 'ol', 'ow', 'os',
+        'oc', 'oo', 'shadow', 'bdb', 'o', 'fil',
+        'bfil', 'mbm', 'tf', 'tfo', 'trst', 'psp',
+        'po', 'bv', 'tr', 'tp', 'trdu', 'ttf',
+        'trde', 'anim', 'an', 'ad', 'atf', 'ande',
+        'aic', 'andi', 'afm', 'aps', 'wc', 'ct',
+        'cur', 'pe', 'us', 'tac', 'sb', 'sst',
+        'ssa', 'cc', 'acco', 'app', 'cl', 'cp',
+        'ma', 'q', 'cr', 'ci', 'tl', 'ec',
+        'iso', 'wos', 'all',
+    ];
+
     /** The CSS property name for this case. */
     public function css(): string
     {
         return self::ALL[$this->value];
+    }
+
+    /** The short class-name code for this case ('padding' → 'p'). */
+    public function alias(): string
+    {
+        return self::ALIASES[$this->value];
+    }
+
+    /** Resolve a class-name code back to its property ('p' → padding), or null. */
+    public static function fromAlias(string $alias): ?self
+    {
+        static $index = null;
+        $index ??= array_flip(self::ALIASES);
+        $id = $index[$alias] ?? null;
+        return $id === null ? null : self::from($id);
     }
 }
