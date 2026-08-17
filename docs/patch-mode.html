@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BrickPHP — Patch Mode: How the Server Diff Works</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 16mm 16mm; }
+
+  :root {
+    --ink:      #1a1c1f;
+    --muted:    #5b6470;
+    --faint:    #8b95a1;
+    --rule:     #d8dee6;
+    --hairline: #eaeef3;
+    --accent:   #1f5fa9;
+    --old:      #a8500f;
+    --new:      #1a6f4a;
+    --codebg:   #f6f8fa;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    font-size: 10pt;
+    line-height: 1.55;
+    color: var(--ink);
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .title-block { border-bottom: 2.5px solid var(--ink); padding-bottom: 14px; margin-bottom: 26px; }
+  .eyebrow { font-size: 8pt; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); margin-bottom: 8px; }
+  h1 { font-size: 25pt; line-height: 1.1; margin: 0 0 8px; letter-spacing: -.02em; }
+  .standfirst { font-size: 10.5pt; color: var(--muted); margin: 0; max-width: 46em; }
+
+  h2 {
+    font-size: 14pt; margin: 30px 0 10px; padding-top: 10px;
+    border-top: 1px solid var(--rule); letter-spacing: -.01em;
+    break-after: avoid;
+  }
+  h2 .num { color: var(--faint); font-weight: 400; margin-right: .5em; font-variant-numeric: tabular-nums; }
+  h3 { font-size: 10.5pt; margin: 20px 0 6px; letter-spacing: .01em; break-after: avoid; }
+  h4 { font-size: 9.5pt; margin: 15px 0 5px; color: var(--muted); break-after: avoid; }
+
+  p { margin: 0 0 9px; max-width: 48em; }
+  ul, ol { margin: 0 0 10px; padding-left: 20px; max-width: 46em; }
+  li { margin-bottom: 4px; }
+
+  code { font-family: var(--mono); font-size: .88em; background: var(--codebg); padding: .1em .32em; border-radius: 3px; }
+  .src { font-family: var(--mono); font-size: 8pt; color: var(--faint); white-space: nowrap; }
+  a { color: var(--accent); text-decoration: none; }
+
+  pre {
+    font-family: var(--mono); font-size: 8.2pt; line-height: 1.5;
+    background: var(--codebg); border: 1px solid var(--hairline);
+    border-left: 3px solid var(--rule);
+    border-radius: 4px; padding: 10px 12px; margin: 10px 0 12px;
+    overflow-x: auto; white-space: pre; break-inside: avoid;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  pre .c { color: var(--faint); }
+  pre .k { color: #8250df; }
+  pre .s { color: #0a6b52; }
+  pre .hl { background: #fff3cd; }
+  pre .o { color: var(--old); }
+  pre .nw { color: var(--new); }
+
+  .caption { font-size: 8pt; color: var(--faint); margin: -6px 0 14px; }
+
+  .note {
+    border-left: 3px solid var(--accent); background: #f2f7fd;
+    padding: 9px 12px; margin: 12px 0; font-size: 9.4pt; break-inside: avoid;
+  }
+  .warn { border-left-color: #b8860b; background: #fdf8ec; }
+  .note .lbl { font-weight: 700; letter-spacing: .04em; font-size: 8pt; text-transform: uppercase; display: block; margin-bottom: 3px; color: var(--muted); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 8.8pt; margin: 10px 0 14px; break-inside: avoid; }
+  /* Tables taller than a page: let them split rather than shunt a whole page blank. */
+  table.long { break-inside: auto; }
+  table.long tr { break-inside: avoid; }
+  th { text-align: left; border-bottom: 1.5px solid var(--ink); padding: 5px 8px 5px 0; font-size: 8pt; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); vertical-align: bottom; }
+  td { border-bottom: 1px solid var(--hairline); padding: 6px 8px 6px 0; vertical-align: top; }
+  td:first-child, th:first-child { padding-left: 0; }
+  td.mono, th.mono { font-family: var(--mono); font-size: 8pt; }
+  td.nw { white-space: nowrap; }
+  .yes { color: var(--new); font-weight: 700; }
+  .no  { color: var(--faint); }
+
+  .diagram { border: 1px solid var(--rule); border-radius: 5px; padding: 14px; margin: 14px 0; break-inside: avoid; background: #fcfdfe; }
+  .diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 8pt; line-height: 1.45; }
+  .flow { display: flex; align-items: stretch; gap: 0; margin: 4px 0; flex-wrap: wrap; }
+  .step {
+    flex: 1 1 0; min-width: 78px; border: 1px solid var(--rule); border-radius: 4px;
+    padding: 7px 8px; font-size: 8.2pt; background: #fff; margin-right: 16px; position: relative;
+  }
+  .step:last-child { margin-right: 0; }
+  .step::after {
+    content: "→"; position: absolute; right: -13px; top: 50%; transform: translateY(-50%);
+    color: var(--faint); font-size: 11pt;
+  }
+  .step:last-child::after { content: ""; }
+  .step .n { display: block; font-size: 7pt; letter-spacing: .1em; color: var(--faint); text-transform: uppercase; margin-bottom: 2px; }
+  .step.old { border-color: var(--old); }
+  .step.old .n { color: var(--old); }
+  .step.new { border-color: var(--new); }
+  .step.new .n { color: var(--new); }
+
+  .legend { font-size: 8pt; color: var(--muted); margin-top: 8px; }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: baseline; margin-right: 3px; }
+
+  .observed { border-left-color: var(--new); background: #f3faf6; }
+  .observed .lbl { color: var(--new); }
+
+  .break { break-before: page; }
+  .keep { break-inside: avoid; }
+
+  /* Keep the colophon with the last table rather than letting it claim a page of its own. */
+  footer { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--rule); font-size: 8pt; color: var(--faint); break-before: avoid; }
+</style>
+</head>
+<body>
+
+<div class="title-block">
+  <div class="eyebrow">BrickPHP · Internals</div>
+  <h1>Patch Mode</h1>
+  <p class="standfirst">
+    What the server does on every interaction after the page exists: render the screen
+    twice, compare the two renders, and ship the difference. This document covers the
+    patch path only — the initial GET, which sends whole HTML and never diffs, is out
+    of scope. It covers what separates a component from a DOM node, which lifecycle
+    hooks fire in which phase, and how a component finds its state again.
+  </p>
+</div>
+
+<h2><span class="num">1</span>The idea in one paragraph</h2>
+
+<p>
+  There is no component state on the client and no re-render on the client. When the
+  user clicks something, the browser posts the path of the node that was clicked and
+  the name of the event. The server rebuilds the screen <em>as it was</em> — that is the
+  OLD tree — runs the event handler against it, then builds the screen again from the
+  mutated state — the NEW tree. Two DOM trees now sit in memory in the same PHP process,
+  one describing what the browser is showing and one describing what it should show.
+  Comparing them produces a list of small operations (<code>set_attribute</code>,
+  <code>replace_text</code>, <code>insert_at</code>…), each addressed by a path of child
+  indices. That list is the response. The client walks each path and applies each
+  operation. The server holds the truth; the browser holds a projection of it.
+</p>
+
+<div class="note">
+  <span class="lbl">The load-bearing assumption</span>
+  OLD must be an accurate reconstruction of what is on the screen. Everything else follows
+  from that. The framework spends real effort protecting it — a state hash sent with every
+  request, a <code>previousPath</code> override so OLD renders for the URL the user actually
+  has, and force-patch escape hatches (§8) for values the server cannot know have drifted.
+</div>
+
+<h2><span class="num">2</span>The three phases of a patch request</h2>
+
+<p>
+  <code>RenderPhase</code> has three cases, and two of them belong to this request.
+  <code>Initial</code> is the GET. <code>DiffOld</code> and <code>Patch</code> are the two
+  renders of a POST, and every lifecycle decision in the framework keys off which one is
+  running.
+</p>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="step old"><span class="n">Phase DiffOld</span>Rebuild the screen as it was. New PHP objects, state restored from the store.</div>
+    <div class="step"><span class="n">Event</span><code>findByPath</code> → <code>executeEvent</code>. Handler mutates component state.</div>
+    <div class="step"><span class="n">Persist</span><code>finalizeAll</code> writes every OLD component's state back to the store.</div>
+    <div class="step new"><span class="n">Phase Patch</span>Build the screen again. Fresh objects, restoring the state just written.</div>
+    <div class="step"><span class="n">Deleted</span><code>processDeleted</code> — keys in OLD but not NEW get <code>deleted()</code>.</div>
+    <div class="step"><span class="n">Diff</span><code>$newUi-&gt;compare($oldUi, $patcher)</code> → operations → JSON.</div>
+  </div>
+  <div class="legend">
+    <span class="swatch" style="background: var(--old)"></span>OLD tree — what the browser has &nbsp;&nbsp;
+    <span class="swatch" style="background: var(--new)"></span>NEW tree — what it should have
+  </div>
+</div>
+
+<pre><code><span class="c">// Brick.php — the patch path, condensed to its skeleton</span>
+$oldApp = <span class="k">new</span> ($entry::class)();
+$oldUi  = $oldApp-&gt;render($state, <span class="k">null</span>, RenderPhase::<span class="o">DiffOld</span>);   <span class="c">// 1. replay</span>
+
+$oldUi-&gt;hydrateBindings($bindings);                              <span class="c">// 2. re-apply typed-in values</span>
+$node = $oldUi-&gt;findByPath($path);
+$node?-&gt;executeEvent($event, $state, $value);                     <span class="c">// 3. run the handler</span>
+
+Component::finalizeAll($state);                                  <span class="c">// 4. persist mutations</span>
+
+$newApp = <span class="k">new</span> ($entry::class)();
+$newUi  = $newApp-&gt;render($state, <span class="k">null</span>, RenderPhase::<span class="nw">Patch</span>);     <span class="c">// 5. rebuild</span>
+
+Component::processDeleted();                                     <span class="c">// 6. deleted() + drop bound state</span>
+
+$patcher = <span class="k">new</span> Patcher();
+$newUi-&gt;compare($oldUi, $patcher);                                <span class="c">// 7. diff NEW against OLD</span>
+$patches = $patcher-&gt;getOperations();                             <span class="c">// 8. serialise (DomNode → html)</span></code></pre>
+<p class="caption">src/Brick.php — the real code adds timing marks, hash checks and error recovery around these eight steps.</p>
+
+<p>
+  Two details in that skeleton are easy to miss and explain a lot of behaviour later.
+  First, <strong>OLD and NEW are different PHP objects</strong>. A component instance never
+  survives from one to the other; only its <em>state</em> does, and only by being written to
+  the store in step 4 and read back in step 5. Second, <strong>the event runs against OLD</strong>,
+  which is why the handler closure you captured in <code>build()</code> during the OLD render
+  is the one that fires — and why its mutations have to be swept out of every OLD component,
+  not just the one that owned the event.
+</p>
+
+<div class="note warn">
+  <span class="lbl">Why finalizeAll, not finalize</span>
+  A handler can mutate a component <em>above</em> the one that owns the event — a row's delete
+  button typically captures <code>$this</code> from the list that built it. Finalizing only the
+  event's owner would silently drop that mutation, so the framework finalizes every component
+  registered during the OLD render.
+</div>
+
+<h2><span class="num">3</span>Two trees: components vs DOM nodes</h2>
+
+<p>
+  BrickPHP has two node families and they do different jobs. Conflating them is the single
+  biggest source of confusion about what the diff will do.
+</p>
+
+<ul>
+  <li><strong><code>VNode</code></strong> — the tree you write. <code>Component</code>,
+      <code>StatelessComponent</code>, and every <code>UIElement</code> (<code>UI::column()</code>,
+      <code>UI::text()</code>…). A VNode has a <code>render()</code> and a lifecycle. It is a
+      <em>producer</em>.</li>
+  <li><strong><code>DomNode</code></strong> — the tree that gets compared.
+      <code>TagDomNode</code> (an element), <code>TextDomNode</code>, <code>ListDomNode</code>,
+      <code>CommentDomNode</code>, <code>NoOpDomNode</code>. A DomNode has
+      <code>compare()</code>, <code>toHtml()</code> and a path. It is the <em>subject</em>.</li>
+</ul>
+
+<p>
+  Rendering collapses the first into the second. Components leave no trace in the DomNode
+  tree: they contribute their build output and disappear. <strong>The diff never sees a
+  component.</strong> It walks elements and text.
+</p>
+
+<div class="diagram">
+<pre>  VNode tree — what build() returns          DomNode tree — what compare() walks
+  ─────────────────────────────────          ──────────────────────────────────
+  FlagQuizApp          <span class="c">(Component)</span>    ──►   div.shell                     <span class="c">[ ]</span>
+  └─ FlagQuiz          <span class="c">(Component)</span>          ├─ div.scorebar               <span class="c">[0]</span>
+     ├─ ScoreBar       <span class="c">(Component)</span>          │  ├─ span "12 / 197"         <span class="c">[0,0]</span>
+     │  ├─ UI::row()   <span class="c">(UIElement)</span>          │  └─ span "0:42"             <span class="c">[0,1]</span>
+     │  └─ UI::text()  <span class="c">(UIElement)</span>          └─ form                       <span class="c">[1]</span>
+     └─ GuessPanel     <span class="c">(Component)</span>             └─ input                   <span class="c">[1,0]</span>
+        └─ UI::input() <span class="c">(UIElement)</span>
+
+  Components decide WHETHER a subtree is produced.
+  DomNodes decide WHAT patches come out of it.</pre>
+</div>
+
+<table>
+  <thead>
+    <tr><th style="width:26%">&nbsp;</th><th style="width:37%">Component (VNode)</th><th>DOM node</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Exists in the diff</td><td>No — collapses during render</td><td>Yes — <code>compare()</code> is defined on it</td></tr>
+    <tr><td>Identity</td><td><code>path:ClassName</code> (§5)</td><td>Position among siblings, or <code>key</code> (§7)</td></tr>
+    <tr><td>Holds state</td><td>Yes, via <code>useState()</code></td><td>No</td></tr>
+    <tr><td>Lifecycle hooks</td><td>Yes (§4)</td><td>None</td></tr>
+    <tr><td>Can skip work</td><td><code>shouldRender()</code> → whole subtree not built</td><td><code>frozen</code> → subtree not compared</td></tr>
+    <tr><td>Can force work</td><td>—</td><td><code>invalidated</code> → patch emitted regardless</td></tr>
+    <tr><td>Unit of reuse</td><td>Code</td><td>DOM</td></tr>
+  </tbody>
+</table>
+
+<p>
+  The practical consequence: <em>moving a component in the tree does not move its DOM</em>,
+  and <em>keying a DOM node does not key the component that produced it</em>. They are
+  addressed by two independent schemes, described in §5 and §7 respectively.
+</p>
+
+<h2><span class="num">4</span>Component lifecycle in patch mode</h2>
+
+<p>
+  <code>Component::render()</code> runs the same sequence in both phases; what differs is
+  which branch each decision takes. Reading it top to bottom:
+</p>
+
+<pre><code><span class="c">// src/VNode/Component.php::render() — order of operations</span>
+$this-&gt;ensureInitialized();          <span class="c">// initialize() once per instance → registers state refs</span>
+$saved = $resolved-&gt;getState($key);  <span class="c">// look up path:Class in the store</span>
+$this-&gt;setState($saved);             <span class="c">// write restored values back through the refs</span>
+$this-&gt;stateSnapshot = …;            <span class="c">// serialise state NOW, before any handler can touch it</span>
+
+$phase === Patch
+    ? self::$newRegistry[$key] = $this
+    : self::$oldRegistry[$key] = $this;
+
+$this-&gt;restored();                   <span class="c">// hook: state is in place</span>
+
+$first = match ($phase) {            <span class="c">// "is this the component's first appearance?"</span>
+    Initial =&gt; <span class="k">true</span>,
+    Patch   =&gt; !isset(self::$oldRegistry[$key]),
+    default =&gt; <span class="k">false</span>,           <span class="c">// DiffOld is a replay — never "first"</span>
+};
+$first ? $this-&gt;created() : $this-&gt;updated();
+
+<span class="k">if</span> ($phase === Patch &amp;&amp; $old !== <span class="k">null</span> &amp;&amp; !$this-&gt;shouldRender($old)) {
+    <span class="k">return new</span> NoOpDomNode();       <span class="c">// no build, no diff, DOM left alone</span>
+}
+
+$child = $this-&gt;build();
+$rendered = $child-&gt;render($state, $this, $phase);</code></pre>
+
+<h3>Which hook fires when</h3>
+
+<table class="long">
+  <thead>
+    <tr><th style="width:18%">Hook</th><th style="width:15%">Declared on</th><th class="nw" style="width:11%">DiffOld</th><th class="nw" style="width:11%">Patch</th><th>What it is for</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="mono">initialize()</td><td>Component</td>
+      <td class="yes">once</td><td class="yes">once</td>
+      <td>Register state with <code>useState()</code>. Once per <em>instance</em> — and each phase builds fresh instances, so it runs twice per request.</td>
+    </tr>
+    <tr>
+      <td class="mono">restored()</td><td>Component</td>
+      <td class="yes">always</td><td class="yes">always</td>
+      <td>State has been read back out of the store and is live on the properties.</td>
+    </tr>
+    <tr>
+      <td class="mono">created()</td><td>BaseComponent</td>
+      <td class="no">never</td><td class="yes">new keys only</td>
+      <td>This <code>path:Class</code> was not in the OLD tree — a genuinely new component. DiffOld is a replay of something that already exists, so it never fires there.</td>
+    </tr>
+    <tr>
+      <td class="mono">updated()</td><td>Component</td>
+      <td class="yes">always</td><td class="yes">existing keys</td>
+      <td>The complement of <code>created()</code>: the component was already there.</td>
+    </tr>
+    <tr>
+      <td class="mono">shouldRender()</td><td>BaseComponent</td>
+      <td class="no">not consulted</td><td class="yes">always</td>
+      <td>Memoisation. <code>false</code> returns a <code>NoOpDomNode</code>: no <code>build()</code>, no comparison, no patches for the subtree.</td>
+    </tr>
+    <tr>
+      <td class="mono">build()</td><td>Component</td>
+      <td class="yes">always</td><td class="yes">unless skipped</td>
+      <td>Produce the subtree. Runs in both phases — that is what makes two trees to compare.</td>
+    </tr>
+    <tr>
+      <td class="mono">rendered()</td><td>BaseComponent</td>
+      <td class="no">skipped</td><td class="yes">stateless only</td>
+      <td>Fires after the subtree exists. See the caveat below — <code>Component</code> does not fire it.</td>
+    </tr>
+    <tr>
+      <td class="mono">deleted()</td><td>Component</td>
+      <td colspan="2" class="yes" style="text-align:center">after both renders</td>
+      <td>Key present in OLD, absent from NEW. Fired by <code>processDeleted()</code>, which then drops the component's bound state.</td>
+    </tr>
+    <tr>
+      <td class="mono">finalize()</td><td>Component</td>
+      <td class="yes">via finalizeAll</td><td class="no">—</td>
+      <td>Writes the component's state to the store. Called on OLD instances after the event handler has run.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note warn">
+  <span class="lbl">rendered() and Component</span>
+  <code>rendered()</code> is declared on <code>BaseComponent</code> and called from
+  <code>BaseComponent::render()</code>. <code>Component</code> overrides <code>render()</code>
+  wholesale and does not call it, so the hook fires for <code>StatelessComponent</code>
+  subclasses and not for <code>Component</code> subclasses. If you need a post-build side
+  effect on a stateful component, put it at the end of <code>build()</code> or use
+  <code>created()</code> / <code>updated()</code>.
+</div>
+
+<h3>Observed: one patch cycle, hook by hook</h3>
+
+<p>
+  A three-child screen — a stateful <code>Leaf&nbsp;A</code>, a <code>StatelessComponent</code>,
+  and a second <code>Leaf&nbsp;B</code>. The event bumps A's counter and drops B from the tree.
+</p>
+
+<div class="note observed">
+  <span class="lbl">Recorded from a live render, not reconstructed</span>
+<pre style="background:none;border:none;padding:0;margin:6px 0 0"><code><span class="o">--- DIFF OLD ---</span>                          <span class="c">// phase 1: rebuild what the screen shows</span>
+A initialize
+A restored(count=0) key=0:Leaf
+A updated                                 <span class="c">// not created — DiffOld is a replay</span>
+B initialize
+B restored(count=0) key=2:Leaf
+B updated
+
+<span class="c">--- EVENT: A bumps its count, B leaves the tree ---</span>
+state keys after finalizeAll: 0:Leaf , 2:Leaf
+
+<span class="nw">--- PATCH ---</span>                              <span class="c">// phase 2: rebuild from the mutated state</span>
+A initialize                              <span class="c">// a NEW instance: initialize runs again</span>
+A restored(count=1) key=0:Leaf            <span class="c">// the mutation arrived through the store</span>
+A updated                                 <span class="c">// key was in OLD → updated, not created</span>
+Plain rendered                            <span class="c">// stateless component: rendered() does fire</span>
+
+<span class="c">--- PROCESS DELETED ---</span>
+B deleted                                 <span class="c">// in OLD, absent from NEW</span>
+state keys after processDeleted: 0:Leaf   <span class="c">// B's bound state dropped with it</span>
+
+<span class="c">--- DIFF ---</span>
+patch: delete_node path=[2]
+patch: replace_text path=[0,0] A:1        <span class="c">// the only textual change in the whole tree</span></code></pre>
+</div>
+
+<p>
+  Note what the diff did <em>not</em> emit: nothing for the untouched stateless component,
+  nothing for the container. Two operations for a tree of six nodes.
+</p>
+
+<h2 class="break"><span class="num">5</span>State keys</h2>
+
+<p>
+  A component's state has to survive the gap between two renders of two different object
+  graphs. The bridge is a string key. <code>VNode::getStateKey()</code> builds it:
+</p>
+
+<pre><code><span class="k">protected function</span> getStateKey(): <span class="k">string</span>
+{
+    $className = <span class="k">static</span>::class;
+    $pathStr   = implode(<span class="s">'.'</span>, $this-&gt;path);
+    <span class="k">return</span> $pathStr === <span class="s">''</span> ? $className : <span class="s">"$pathStr:$className"</span>;
+}</code></pre>
+
+<p>
+  So the key is <strong>position in the tree, plus the class name</strong> —
+  <code>0.1.2:Samples\FlagQuiz\Components\ScoreBar</code>. The root App, having no path,
+  keys on its class name alone.
+</p>
+
+<h3>Where the path comes from</h3>
+
+<p>
+  Not from the DOM. Paths are handed down during render, in
+  <code>UIElementContent::render()</code>, as each element walks the children it was given:
+</p>
+
+<pre><code><span class="k">foreach</span> ($this-&gt;children <span class="k">as</span> $child) {
+    <span class="k">if</span> ($child <span class="k">instanceof</span> VNode) {
+        $child-&gt;setPath([...$this-&gt;path, $index]);        <span class="c">// ← the component's address</span>
+        $domChildren[] = $child-&gt;render($state, $this, $phase);
+    } <span class="k">elseif</span> (…) { … }
+    $index++;                                            <span class="c">// every slot counts, strings included</span>
+}</code></pre>
+
+<p>
+  Two consequences worth internalising. A component's key is a function of
+  <em>where it sits in its parent's <code>content()</code> call</em>, and the index advances
+  for every child slot — including plain strings and raw DOM nodes, which are not components
+  at all. And because the class name is part of the key, two different component classes at
+  the same position never collide, while two instances of the same class at different
+  positions never share.
+</p>
+
+<div class="note observed">
+  <span class="lbl">Observed: state does not follow a moved component</span>
+<pre style="background:none;border:none;padding:0;margin:6px 0 0"><code>counter key (no spacer):    <span class="o">0:Counter</span> -&gt; n=7        <span class="c">// state saved under 0:Counter</span>
+counter key (spacer added): <span class="nw">1:Counter</span> -&gt; n=0        <span class="c">// same component, new address</span>
+                                                    <span class="c">// ← state did NOT follow</span></code></pre>
+</div>
+
+<p>
+  Inserting one sibling above a component renames its key, and the lookup in the store misses.
+  From the framework's point of view this is not a move at all: the old key is in OLD but not
+  in NEW, so it is <em>deleted</em> (and its bound state discarded), while the new key is in
+  NEW but not OLD, so it is <em>created</em>. If a subtree's position can shift, keep the state
+  above the shifting boundary — in a parent whose own position is stable — or make it global.
+</p>
+
+<h3>Reading, writing, and dropping</h3>
+
+<table>
+  <thead><tr><th style="width:24%">Step</th><th style="width:30%">Code</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td>Register</td><td class="mono">useState($this-&gt;n)</td>
+        <td>Binds the property <em>by reference</em> into a <code>StateRef</code>, so restore writes straight through to it. Call it in <code>initialize()</code>.</td></tr>
+    <tr><td>Restore</td><td class="mono">getState($key)</td>
+        <td>An indexed array, applied in registration order. A count mismatch aborts the restore rather than corrupting it.</td></tr>
+    <tr><td>Persist</td><td class="mono">finalize($state)</td>
+        <td><code>saveState($key, $values)</code>, run for every OLD component after the handler.</td></tr>
+    <tr><td>Drop</td><td class="mono">processDeleted()</td>
+        <td><code>removeState($key)</code> — but only if the component registered at least one <code>Bound</code> ref.</td></tr>
+    <tr><td>Share</td><td class="mono">useGlobalState($ref, 'cart')</td>
+        <td>A fixed key of your choosing. Position-independent, survives deletion, shared by every component that names it.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  <code>StateLifecycle::Bound</code> (the default) means the state belongs to the component and
+  dies with it. <code>Unbound</code> means the entry outlives the component, so a screen the user
+  navigates away from and back to finds its values again. The choice is per-registration; a
+  single <code>Bound</code> ref is enough to make the component's whole entry removable.
+</p>
+
+<h3>The staleness guard</h3>
+
+<p>
+  Every response carries <code>sha1(serialize($state-&gt;getAll()))</code>, and the client echoes
+  it on the next request. If the store hashes differently than the client expects — another tab
+  moved the state, or a deploy changed its shape — the server does not attempt a patch. It
+  answers <code>{success: false, reload: true}</code>, because OLD could no longer be
+  reconstructed faithfully, and every patch downstream of a wrong OLD is wrong too.
+</p>
+
+<h2><span class="num">6</span>How two DOM nodes are compared</h2>
+
+<p>
+  <code>compare()</code> is called on the NEW node with the OLD node as its argument —
+  <code>$newUi-&gt;compare($oldUi, $patcher)</code>. Read every method as "make the browser look
+  like <code>$this</code>". <code>TagDomNode::compare()</code> checks in this order:
+</p>
+
+<table>
+  <thead><tr><th style="width:6%">#</th><th style="width:30%">Check</th><th>Outcome</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><code>$this-&gt;frozen</code></td><td>Return immediately. No attributes, no children, no patches — the subtree is not even walked.</td></tr>
+    <tr><td>2</td><td>Other is not a tag, or tags differ</td><td><code>replace_node</code> with this node's full HTML. The old subtree's listeners are unbound, the new subtree's are bound.</td></tr>
+    <tr><td>3</td><td><code>$this-&gt;invalidated</code></td><td>Propagate the flag to every child, so the whole subtree force-emits.</td></tr>
+    <tr><td>4</td><td>Attributes</td><td><code>set_attribute</code> for each attribute that is new, changed, or force-flagged; <code>remove_attribute</code> for each that vanished.</td></tr>
+    <tr><td>5</td><td>Classes</td><td>Compared as a set of names; emitted as one <code>set_attribute class="…"</code> when they differ.</td></tr>
+    <tr><td>6</td><td>Listeners</td><td><code>diffEvents()</code> — appeared listeners bind, vanished ones unbind, unchanged ones keep their registration.</td></tr>
+    <tr><td>7</td><td>Children</td><td>Keyed or positional (§7).</td></tr>
+  </tbody>
+</table>
+
+<p>
+  The leaf cases are smaller. <code>TextDomNode::compare()</code> emits
+  <code>replace_text</code> when the content differs (or the node is invalidated) and
+  <code>replace_node</code> when OLD was not text at all. <code>NoOpDomNode::compare()</code>
+  is an empty method — that is the whole mechanism behind <code>shouldRender() === false</code>:
+  the component returns a node whose comparison does nothing, so the browser keeps whatever it
+  had.
+</p>
+
+<div class="note observed">
+  <span class="lbl">Observed: shouldRender()</span>
+<pre style="background:none;border:none;padding:0;margin:6px 0 0"><code>same props   -&gt; Memo::build() calls: 0, patches: none
+prop changed -&gt; Memo::build() calls: 1, patches: replace_text[1,0] "changed"</code></pre>
+</div>
+
+<p>
+  The decision is taken <em>per level, while descending</em> — there is no pass that builds
+  the whole NEW tree and then decides what to keep. <code>shouldRender()</code> is consulted
+  before <code>build()</code>, so a <code>false</code> stops the traversal at that node and
+  nothing below it is constructed at all.
+</p>
+
+<div class="note warn">
+  <span class="lbl">Memoising a parent deletes its children's state</span>
+  <code>frozen</code> and <code>shouldRender()</code> skip in <em>different</em> phases, and the
+  difference has teeth. A frozen subtree is skipped in DiffOld <em>and</em> Patch, so the
+  components inside it are missing from both registries and nothing happens to them. A
+  <code>shouldRender()</code> of <code>false</code> skips the NEW render only — the OLD replay
+  already walked that subtree and registered every component in it. <code>processDeleted()</code>
+  compares the two registries, finds those descendants in OLD and not in NEW, and treats them as
+  deleted: <code>deleted()</code> fires and their bound state is dropped from the store. Observed,
+  for a stateful grandchild under a parent that skipped:
+<pre style="background:none;border:none;padding:0;margin:6px 0 0"><code>parent rebuilds -&gt; Grandchild restored(n=42) … stored keys now: 0.0.0:Grandchild
+parent skips    -&gt; Grandchild deleted()      … stored keys now: (none)</code></pre>
+  Which is the deeper reason <code>shouldRender()</code> belongs on leaves: on a parent it does
+  not merely risk missing a change, it destroys the state underneath it.
+</div>
+
+<p>
+  <code>hasChanged($old)</code> makes that decision cheap to implement: at the top of
+  <code>render()</code> each component serialises its own declared properties into a snapshot
+  string, <em>before</em> any handler can run, and the two snapshots are compared. It is a
+  leaf-component tool. Returning <code>false</code> from a parent skips its descendants'
+  builds too, and a child's own state can change without the parent's snapshot moving at all —
+  the change would simply never reach the DOM.
+</p>
+
+<h2><span class="num">7</span>Children: positional and keyed</h2>
+
+<p>
+  If <em>every</em> child on both sides carries a key, the keyed strategy runs; otherwise the
+  positional one does. There is no partial mode.
+</p>
+
+<p>
+  <strong>Positional</strong> compares child <em>i</em> with child <em>i</em>, deletes the tail
+  when NEW is shorter, and inserts when it is longer. It is correct and it is cheap, but it has
+  no concept of identity: removing an item from the middle of a list rewrites every item after
+  it.
+</p>
+
+<p>
+  <strong>Keyed</strong> matches by key instead. Each key maps to a FIFO queue of old indices,
+  and a candidate is accepted only if its old index is strictly greater than the last one
+  matched. Anything that would have to move backwards is deleted and re-inserted instead —
+  the diff produces correct order without emitting move operations, at the cost of losing DOM
+  state (focus, scroll position, a playing animation) for the nodes that get re-created.
+</p>
+
+<div class="note observed">
+  <span class="lbl">Observed: three children, the middle one removed</span>
+<pre style="background:none;border:none;padding:0;margin:6px 0 0"><code>keyed     -&gt; remove_at[]#1                              <span class="c">// one op; a and c are untouched</span>
+unkeyed   -&gt; delete_node[2], replace_text[1,0] "c"      <span class="c">// b is rewritten into c, tail dropped</span></code></pre>
+</div>
+
+<p>
+  Keys are also usable as a deliberate <em>replace</em> signal. Keying a node on its own value —
+  <code>-&gt;key('right-' . $count)</code> — guarantees that a changed value produces a new node
+  rather than a patched one, which restarts CSS animations that only run on element creation.
+</p>
+
+<h2><span class="num">8</span>Escape hatches</h2>
+
+<p>
+  The diff is a comparison of two server renders, so it detects exactly the changes the server
+  can see. Four flags exist for the cases where that is either too much work or not enough.
+</p>
+
+<table>
+  <thead><tr><th style="width:24%">Flag</th><th style="width:20%">Direction</th><th>When</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">frozen</td><td>Compare less</td>
+        <td>Genuinely static UI — a logo, a footer. The subtree is skipped in both renders and never compared — which is why, unlike <code>shouldRender()</code>, it leaves the state of any component inside it alone.</td></tr>
+    <tr><td class="mono">invalidate()</td><td>Compare more</td>
+        <td>Force-patch this node and everything under it. For subtrees whose correctness the server cannot verify.</td></tr>
+    <tr><td class="mono">invalidateAttr(name)</td><td>Compare more</td>
+        <td>One attribute, force-patched; the rest of the node diffs normally.</td></tr>
+    <tr><td class="mono">invalidateText()</td><td>Compare more</td>
+        <td>The direct text children, force-patched.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  The "compare more" flags all exist for one situation: <strong>the DOM has drifted from what
+  OLD says it is</strong>. Two server renders agreeing tells you nothing if something other than
+  the server has been writing to that node.
+</p>
+
+<div class="note">
+  <span class="lbl">A worked example</span>
+  The Vexi quiz shows elapsed time. The server renders the seconds it counted, and a client
+  script ticks the display between requests. By the time the next request arrives, the DOM says
+  <code>0:27</code> while both OLD and NEW say <code>0:26</code> — the server's two renders agree,
+  so an honest diff emits nothing, and the clock would jam at whatever the script last wrote.
+  <code>invalidateText()</code> on that cell forces the text out on every patch, and the display
+  re-anchors to the server's figure. The same reasoning covers a value the user typed, a canvas
+  a chart library drew into, and anything derived from <code>time()</code> or randomness.
+</div>
+
+<h2><span class="num">9</span>The patch protocol</h2>
+
+<p>
+  <code>Patcher</code> is a plain collector — the diff calls methods on it, and
+  <code>getOperations()</code> serialises any <code>DomNode</code> it is holding into an
+  <code>html</code> string. The result is a flat array in emission order.
+</p>
+
+<table>
+  <thead><tr><th style="width:22%">Operation</th><th style="width:26%">Payload</th><th>Client action</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">replace_node</td><td>path, html</td><td>Clean up listeners, <code>replaceWith</code> the parsed element.</td></tr>
+    <tr><td class="mono">insert_node</td><td>path, html</td><td>Insert before <code>parent.children[i]</code>, or append past the end.</td></tr>
+    <tr><td class="mono">delete_node</td><td>path</td><td>Clean up listeners and remove.</td></tr>
+    <tr><td class="mono">replace_text</td><td>path, text</td><td>Assign <code>textContent</code>.</td></tr>
+    <tr><td class="mono">set_attribute</td><td>path, name, value</td><td><code>setAttribute</code> — plus the matching <em>property</em> for <code>value</code> and <code>checked</code>, since a form control's attribute is only its default.</td></tr>
+    <tr><td class="mono">remove_attribute</td><td>path, name</td><td><code>removeAttribute</code>.</td></tr>
+    <tr><td class="mono">insert_at / remove_at / update_at</td><td>parent path, index, html</td><td>Keyed-list operations, addressed by parent plus index rather than by full child path.</td></tr>
+  </tbody>
+</table>
+
+<pre><code><span class="c">// The client resolves every path the same way the server built it:</span>
+<span class="k">function</span> findNodeByPath(path) {
+    <span class="k">let</span> node = document.body.firstElementChild;   <span class="c">// the app root</span>
+    <span class="k">for</span> (<span class="k">const</span> index <span class="k">of</span> path) node = node.children[index];
+    <span class="k">return</span> node;
+}</code></pre>
+
+<p>
+  Element children only — which is why <code>UI::text()</code> renders as a
+  <code>&lt;span&gt;</code> rather than a bare text node. A raw text node would not occupy an
+  index in <code>children</code>, and every path after it would point at the wrong element.
+  Giving text an element wrapper keeps server paths and client paths in step.
+</p>
+
+<h2><span class="num">10</span>Source map</h2>
+
+<table class="long">
+  <thead><tr><th style="width:36%">File</th><th>Responsibility in patch mode</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">src/Brick.php</td><td>The POST path: hash check, DiffOld render, event dispatch, finalizeAll, Patch render, processDeleted, compare, response.</td></tr>
+    <tr><td class="mono">src/VNode/RenderPhase.php</td><td>The three-case enum every phase decision reads.</td></tr>
+    <tr><td class="mono">src/VNode/Component.php</td><td>State registration and restore, the registries, restored / created / updated / deleted, finalizeAll, processDeleted.</td></tr>
+    <tr><td class="mono">src/VNode/BaseComponent.php</td><td>The minimal component surface: build, created, shouldRender, rendered.</td></tr>
+    <tr><td class="mono">src/VNode/Patcher.php</td><td>Operation collection and serialisation.</td></tr>
+    <tr><td class="mono">src/UI/DomNode.php</td><td>Paths, keys, the frozen / invalidated flags, the compare contract.</td></tr>
+    <tr><td class="mono">src/UI/TagDomNode.php</td><td>The element diff: attributes, classes, events, positional and keyed children.</td></tr>
+    <tr><td class="mono">src/UI/TextDomNode.php</td><td>Text comparison.</td></tr>
+    <tr><td class="mono">src/UI/UIElementContent.php</td><td>Child path assignment — where a component's state key is decided.</td></tr>
+    <tr><td class="mono">src/State/StateManager.php</td><td>getState / saveState / removeState, keyed by <code>path:Class</code>.</td></tr>
+    <tr><td class="mono">assets/brick.js</td><td>Path resolution and patch application on the client.</td></tr>
+  </tbody>
+</table>
+
+<footer>
+  BrickPHP internals · Patch mode. Companion to <em>How the DOM Diff Works</em>, which covers the
+  initial render and the addressing scheme in full. Behavioural claims marked
+  <em>observed</em> were recorded by driving the render phases directly against the framework.
+</footer>
+
+</body>
+</html>
