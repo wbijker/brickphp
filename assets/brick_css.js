@@ -360,11 +360,21 @@ var BrickCss = (function () {
         return out;
     }
 
-    // Parse a class name into its parts. Mirror of CssClass::decode().
+    // Render a functional-pseudo token to its selector, or null. Mirror of
+    // CssClass::functionalPseudo(). has-[img] → :has(img), nth-[2n] →
+    // :nth-child(2n), not-[.x] → :not(.x).
+    var FUNCTIONAL = { has: ':has', nth: ':nth-child', not: ':not' };
+    function functionalPseudo(token) {
+        var m = /^(has|nth|not)-\[(.+)\]$/.exec(token);
+        return m ? FUNCTIONAL[m[1]] + '(' + m[2] + ')' : null;
+    }
+
+    // Parse a class name into its parts. Mirror of CssClass::decode(). The value
+    // is the FINAL bracket group; earlier bracket groups are functional pseudos.
     function decode(name) {
-        var open = name.indexOf('[');
         var close = name.lastIndexOf(']');
-        if (open < 0 || close < 0 || close < open) {
+        var open = close < 0 ? -1 : name.slice(0, close).lastIndexOf('[');
+        if (open < 0 || close < 0) {
             throw new Error('not a BrickCss name (no bracketed value): ' + name);
         }
         var value = name.slice(open + 1, close).split('_').join(' ');
@@ -375,16 +385,17 @@ var BrickCss = (function () {
 
         var parts = {
             media: [], supports: [], combinators: [], pseudoClasses: [],
-            pseudoElement: null,
+            pseudoSelectors: [], pseudoElement: null,
             propertyName: has(TABLES.prop, alias) ? TABLES.prop[alias] : alias,
             value: value
         };
 
         for (var i = 0; i < segments.length; i++) {
-            var t = segments[i];
+            var t = segments[i], fn;
             if (has(TABLES.media, t)) parts.media.push(TABLES.media[t]);
             else if (has(TABLES.supports, t)) parts.supports.push(TABLES.supports[t]);
             else if (has(TABLES.combinator, t)) parts.combinators.push(TABLES.combinator[t]);
+            else if ((fn = functionalPseudo(t)) !== null) parts.pseudoSelectors.push(fn);
             else if (has(TABLES.pseudoElement, t)) parts.pseudoElement = TABLES.pseudoElement[t];
             else if (has(TABLES.pseudoClass, t)) parts.pseudoClasses.push(TABLES.pseudoClass[t]);
             else throw new Error("unknown variant token '" + t + "' in: " + name);
@@ -401,6 +412,7 @@ var BrickCss = (function () {
             sel = p.combinators[i][0] + sel + p.combinators[i][1];
         }
         for (var j = 0; j < p.pseudoClasses.length; j++) sel += p.pseudoClasses[j];
+        for (var k = 0; k < p.pseudoSelectors.length; k++) sel += p.pseudoSelectors[k];
         if (p.pseudoElement) sel += p.pseudoElement;
 
         var out = sel + '{' + p.propertyName + ':' + p.value + '}';
@@ -446,19 +458,36 @@ var BrickCss = (function () {
         return true;
     }
 
-    // Inject every BrickCss class found under `root` (default: document).
-    function scan(root) {
+    // Apply `fn` to every class token under `root` (including root itself).
+    function eachClass(root, fn) {
         var scope = root || document;
-        var nodes = scope.querySelectorAll('[class]');
-        for (var i = 0; i < nodes.length; i++) {
-            var list = nodes[i].classList;
-            for (var j = 0; j < list.length; j++) ensure(list[j]);
+        if (scope.classList) {
+            for (var i = 0; i < scope.classList.length; i++) fn(scope.classList[i]);
+        }
+        var nodes = scope.querySelectorAll ? scope.querySelectorAll('[class]') : [];
+        for (var j = 0; j < nodes.length; j++) {
+            var list = nodes[j].classList;
+            for (var k = 0; k < list.length; k++) fn(list[k]);
         }
     }
 
+    // Inject every BrickCss class found under `root` (default: document).
+    function scan(root) {
+        eachClass(root, ensure);
+    }
+
+    // Mark every BrickCss class under `root` as already handled WITHOUT
+    // injecting — used when a server-rendered sheet already covers them, so
+    // later patches only inject genuinely-new classes.
+    function seed(root) {
+        eachClass(root, function (name) {
+            if (isBrickClass(name)) seen[name] = true;
+        });
+    }
+
     // Watch the document for added nodes / class changes and inject on the fly.
+    // Does NOT inject what's already present — call seed() or scan() first.
     function observe() {
-        scan(document);
         var mo = new MutationObserver(function (records) {
             for (var i = 0; i < records.length; i++) {
                 var r = records[i];
@@ -489,6 +518,7 @@ var BrickCss = (function () {
         rule: rule,
         ensure: ensure,
         scan: scan,
+        seed: seed,
         observe: observe,
         isBrickClass: isBrickClass,
         tables: TABLES

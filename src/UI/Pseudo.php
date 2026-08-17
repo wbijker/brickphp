@@ -46,7 +46,7 @@ class Pseudo
 {
     private ?Breakpoint $breakpoint = null;
     private ?ColorScheme $colorScheme = null;
-    /** @var string[] kebab-case names matching StyleGenerator::PSEUDOS */
+    /** @var string[] kebab-case pseudo tokens mapped by {@see \BrickPHP\Style\Utility} */
     private array $pseudoClasses = [];
     private ?string $pseudoElement = null;
     private ?string $hasSelector = null;

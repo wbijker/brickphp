@@ -7,7 +7,7 @@ use BrickPHP\Events\EventPhase;
 use BrickPHP\Events\EventRegistration;
 use BrickPHP\Events\NativeEventRegistration;
 use BrickPHP\State\StateManager;
-use BrickPHP\UI\Css\CssStyle;
+use BrickPHP\Style\Utility;
 use BrickPHP\VNode\Component;
 use BrickPHP\VNode\Patcher;
 
@@ -35,11 +35,14 @@ class TagDomNode extends DomNode
     /** @var array<string, string> */
     protected array $attributes = [];
 
-    /** @var array<string, array<string, string>> */
-    protected array $styles = [];
-
-    /** @var CssStyle[] */
-    protected array $cssStyles = [];
+    /**
+     * Self-describing utility class names used on this node (set: name => true).
+     * The name IS its encoding — the server renders the sheet from these and the
+     * JS decoder rebuilds each rule client-side. {@see Utility}, {@see CssClass}.
+     *
+     * @var array<string, true>
+     */
+    protected array $utilityClasses = [];
 
     /** @var array<string, array{callback: callable, owner: ?Component, registration: ?EventRegistration}> */
     protected array $events = [];
@@ -149,23 +152,24 @@ class TagDomNode extends DomNode
     }
 
     /**
-     * Add a class with its CSS properties (legacy format).
+     * Add a styling declaration. The `$class` carries the variant prefix
+     * (`md:hover:bg-red-500`) and `$css` the resolved declarations; {@see Utility}
+     * turns each declaration into a self-describing class name whose own text
+     * encodes the rule. A class with no declarations passes through verbatim (a
+     * plain marker class).
+     *
+     * @param array<string, string> $css
      */
     protected function addStyle(string $class, array $css): void
     {
-        $this->classes[] = $class;
-        if (!empty($css)) {
-            $this->styles[$class] = $css;
+        if (empty($css)) {
+            $this->classes[] = $class;
+            return;
         }
-    }
-
-    /**
-     * Add a CssStyle object.
-     */
-    protected function addCssStyle(CssStyle $style): void
-    {
-        $this->classes[] = $style->getClassName();
-        $this->cssStyles[] = $style;
+        foreach (Utility::names($class, $css) as $name) {
+            $this->classes[] = $name;
+            $this->utilityClasses[$name] = true;
+        }
     }
 
     /**
@@ -175,15 +179,6 @@ class TagDomNode extends DomNode
     public function style(string $className, array $css): static
     {
         $this->addStyle($className, $css);
-        return $this;
-    }
-
-    /**
-     * Add a CssStyle rule.
-     */
-    public function css(CssStyle $style): static
-    {
-        $this->addCssStyle($style);
         return $this;
     }
 
@@ -407,45 +402,34 @@ class TagDomNode extends DomNode
     }
 
     /**
-     * Collect all styles from this node and descendants.
-     * @return array<string, array<string, string>>
+     * The self-describing utility class names used by this node and its
+     * descendants (a set, name => true). The server renders `<style>` from
+     * these via {@see CssClass::sheet()}; the client decodes any new ones from
+     * patched HTML.
+     *
+     * @return array<string, true>
      */
     public function collectStyles(): array
     {
-        $allStyles = $this->styles;
-
-        // Include CssStyle objects in legacy format
-        foreach ($this->cssStyles as $style) {
-            $legacy = $style->toLegacy();
-            $allStyles = array_merge($allStyles, $legacy);
-        }
-
+        $all = $this->utilityClasses;
         foreach ($this->children as $child) {
             if ($child instanceof DomNode) {
-                $allStyles = array_merge($allStyles, $child->collectStyles());
+                $all += $child->collectStyles();
             }
         }
-
-        return $allStyles;
+        return $all;
     }
 
     /**
-     * Serialize a class list for the `class` attribute: known utility classes
-     * become their short, stable ordinal token ({@see StyleRegistry}); user
-     * classes (->class(), attr('class')) and anything not registered pass
-     * through verbatim. The client rebuilds the matching rules from the binary
-     * style table. Callers must have interned the page's styles first (Brick
-     * runs StyleRegistry::registerAll before rendering/diffing).
+     * Serialize a class list for the `class` attribute. Class names are already
+     * self-describing (utilities) or user-provided — both are written verbatim;
+     * the stylesheet (server) / decoder (client) resolves the utilities.
      *
      * @param string[] $classes
      */
     private function serializeClasses(array $classes): string
     {
-        $out = [];
-        foreach (array_unique($classes) as $c) {
-            $out[] = StyleRegistry::tokenFor($c) ?? $c;
-        }
-        return implode(' ', $out);
+        return implode(' ', array_unique($classes));
     }
 
     /**

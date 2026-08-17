@@ -41,6 +41,7 @@ CSS;
         private string $styleHash,
         private bool $wireframe,
         private bool $pushClientState,
+        private string $styleSheet = '',
     ) {
     }
 
@@ -60,13 +61,12 @@ CSS;
                 // /style.css is just the preflight browser reset (static,
                 // cacheable). Utility rules follow below.
                 (new TagDomNode('link'))->attr('rel', 'stylesheet')->attr('href', '/style.css?h=' . $this->styleHash),
-                // The app's utility rules aren't shipped as CSS text — brick.js
-                // decodes the binary style table (window.__BRICK_ST, with the
-                // shared dictionary window.__BRICK_SD) into this sheet on load,
-                // and merges patch deltas into it. Empty here; placed after the
-                // reset and before user styles so the cascade stays: reset <
-                // utilities < user styles.
-                (new TagDomNode('style'))->attr('id', 'brick-styles')->rawContent(''),
+                // The app's utility rules, server-rendered from the page's
+                // self-describing class names ({@see CssClass::sheet()}). Placed
+                // after the reset and before user styles so the cascade stays:
+                // reset < utilities < user styles. On POST, brick_css.js decodes
+                // any newly-introduced class names and appends their rules.
+                (new TagDomNode('style'))->attr('id', 'brick-styles')->rawContent($this->styleSheet),
             );
 
         // User-registered external stylesheets — placed after /style.css so
@@ -80,6 +80,9 @@ CSS;
             $head->content((new TagDomNode('style'))->rawContent($inlineStyles));
         }
 
+        // Style decoder before the runtime: brick.js seeds/observes BrickCss to
+        // inject rules for class names introduced by later patches.
+        $head->content((new TagDomNode('script'))->attr('src', '/brick_css.js?v=' . \BrickPHP\Brick::assetVersion('brick_css.js'))->rawContent(''));
         // Framework runtime first so Brick.* is available to user scripts.
         $head->content((new TagDomNode('script'))->attr('src', '/brick.js?v=' . \BrickPHP\Brick::assetVersion('brick.js'))->rawContent(''));
         foreach ($this->entry->getScripts() as $script) {

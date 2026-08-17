@@ -14,6 +14,7 @@ use BrickPHP\Style\CssPseudoElement;
 use BrickPHP\Style\CssStaticValue;
 use BrickPHP\Style\CssSupports;
 use BrickPHP\Style\CssUnit;
+use BrickPHP\Style\Utility;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -160,5 +161,48 @@ final class StyleClassTest extends TestCase
         foreach (CssProperty::cases() as $prop) {
             $this->assertSame($prop, CssProperty::fromAlias($prop->alias()));
         }
+    }
+
+    /** A property outside the enum uses its kebab name as the alias and round-trips. */
+    public function testRawProperty(): void
+    {
+        $c = CssClass::raw('fill', CssStaticValue::raw('#ef4444'))->media(CssMedia::md);
+        $this->assertSame('md_fill-[#ef4444]', $c->name());
+        $this->assertSame(
+            '@media (min-width: 768px){.md_fill-\\[\\#ef4444\\]{fill:#ef4444}}',
+            $c->toCss(),
+        );
+        $this->assertSame('fill', CssClass::decode('fill-[#ef4444]')['propertyName']);
+    }
+
+    /** Functional pseudos (has-[…]/nth-[…]/not-[…]) carry their own brackets. */
+    public function testFunctionalPseudo(): void
+    {
+        $c = CssClass::of(CssProperty::padding, CssStaticValue::raw('1rem'))
+            ->pseudo(CssPseudoClass::hover)->rawPseudo('has-[img]');
+        $this->assertSame('hover_has-[img]_p-[1rem]', $c->name());
+        $this->assertSame('.hover_has-\\[img\\]_p-\\[1rem\\]:hover:has(img){padding:1rem}', $c->toCss());
+        // The value is the FINAL bracket group, not the functional pseudo's.
+        $this->assertSame('1rem', CssClass::decode($c->name())['value']);
+    }
+
+    public function testSheetSkipsNonUtilityNames(): void
+    {
+        $sheet = CssClass::sheet(['user-class', 'p-[4px]', 'not a class']);
+        $this->assertSame('.p-\\[4px\\]{padding:4px}', $sheet);
+    }
+
+    /** The UI funnel: (prefixed class, declarations) → self-describing names. */
+    public function testUtilityConversion(): void
+    {
+        $this->assertSame(['bgc-[#ef4444]'], Utility::names('bg-red-500', ['background-color' => '#ef4444']));
+        $this->assertSame(['md_hover_bgc-[#fff]'], Utility::names('md:hover:bg-x', ['background-color' => '#fff']));
+        // Multi-declaration → multiple atomic classes.
+        $this->assertSame(['bw-[2px]', 'bs-[solid]'], Utility::names('border-2', ['border-width' => '2px', 'border-style' => 'solid']));
+        // '2xl' maps to the xxl breakpoint; odd → functional nth-child.
+        $this->assertSame(['xxl_w-[100%]'], Utility::names('2xl:w-full', ['width' => '100%']));
+        $this->assertSame(['nth-[odd]_bgc-[#eee]'], Utility::names('odd:bg-x', ['background-color' => '#eee']));
+        // A space in the value becomes '_'.
+        $this->assertSame(['shadow-[0_0_0_3px_currentColor]'], Utility::names('shadow', ['box-shadow' => '0 0 0 3px currentColor']));
     }
 }

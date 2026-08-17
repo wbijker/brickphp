@@ -327,4 +327,13 @@ enum CssProperty: int
         $id = $index[$alias] ?? null;
         return $id === null ? null : self::from($id);
     }
+
+    /** Resolve a CSS property name back to its case ('padding-top' → paddingTop), or null. */
+    public static function fromCss(string $css): ?self
+    {
+        static $index = null;
+        $index ??= array_flip(self::ALL);
+        $id = $index[$css] ?? null;
+        return $id === null ? null : self::from($id);
+    }
 }

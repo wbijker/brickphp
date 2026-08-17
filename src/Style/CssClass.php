@@ -39,6 +39,9 @@ final class CssClass
     private CssProperty $property;
     private CssDeclarationValue $value;
 
+    /** Kebab CSS property name when it isn't a known {@see CssProperty} enum case. */
+    private ?string $rawProperty;
+
     /** @var list<CssMedia> */
     private array $media = [];
     /** @var list<CssSupports> */
@@ -47,6 +50,8 @@ final class CssClass
     private array $combinators = [];
     /** @var list<CssPseudoClass> */
     private array $pseudoClasses = [];
+    /** @var list<string> functional-pseudo tokens (has-[…], nth-[…], not-[…]) */
+    private array $rawPseudos = [];
     private ?CssPseudoElement $pseudoElement = null;
 
     // ---- reverse lookups (built once) -------------------------------------
@@ -57,16 +62,41 @@ final class CssClass
 
     // ---- construction -----------------------------------------------------
 
-    public function __construct(CssProperty $property, CssDeclarationValue $value)
+    public function __construct(?CssProperty $property, CssDeclarationValue $value, ?string $rawProperty = null)
     {
-        $this->property = $property;
+        $this->property = $property ?? CssProperty::display;   // placeholder; unused when rawProperty set
+        $this->hasProperty = $property !== null;
+        $this->rawProperty = $rawProperty;
         $this->value = $value;
     }
 
-    /** An atomic declaration class. */
+    /** Whether a known {@see CssProperty} backs this class (vs a raw property string). */
+    private bool $hasProperty = true;
+
+    /** An atomic declaration class for a known property. */
     public static function of(CssProperty $property, CssDeclarationValue $value): self
     {
         return new self($property, $value);
+    }
+
+    /**
+     * An atomic declaration class for a property outside the {@see CssProperty}
+     * enum (SVG `fill`, a custom `--var`, …). The kebab name is used verbatim as
+     * the alias; the decoder rebuilds the property from it.
+     */
+    public static function raw(string $property, CssDeclarationValue $value): self
+    {
+        return new self(null, $value, $property);
+    }
+
+    /**
+     * Add a functional-pseudo variant by its token — `has-[img]`, `nth-[2n]`,
+     * `not-[.x]` — rendered to `:has(img)`, `:nth-child(2n)`, `:not(.x)`.
+     */
+    public function rawPseudo(string $token): static
+    {
+        $this->rawPseudos[] = $token;
+        return $this;
     }
 
     /** Wrap in one or more `@media` variants. */
@@ -122,10 +152,14 @@ final class CssClass
         foreach ($this->pseudoClasses as $pc) {
             $tokens[] = self::pseudoClassToken($pc);
         }
+        foreach ($this->rawPseudos as $token) {
+            $tokens[] = $token;
+        }
         if ($this->pseudoElement !== null) {
             $tokens[] = self::pseudoElementToken($this->pseudoElement);
         }
-        $tokens[] = $this->property->alias() . '-[' . self::encodeValue($this->value->toCss()) . ']';
+        $alias = $this->hasProperty ? $this->property->alias() : $this->rawProperty;
+        $tokens[] = $alias . '-[' . self::encodeValue($this->value->toCss()) . ']';
         return implode('_', $tokens);
     }
 
@@ -164,9 +198,11 @@ final class CssClass
      */
     public static function decode(string $name): array
     {
-        $open = strpos($name, '[');
+        // The value is the FINAL bracket group (`…alias-[value]`); earlier bracket
+        // groups belong to functional-pseudo variants (has-[…], nth-[…], not-[…]).
         $close = strrpos($name, ']');
-        if ($open === false || $close === false || $close < $open) {
+        $open = $close === false ? false : strrpos(substr($name, 0, $close), '[');
+        if ($open === false || $close === false) {
             throw new \InvalidArgumentException("not a CssClass name (no bracketed value): $name");
         }
         $value = self::decodeValue(substr($name, $open + 1, $close - $open - 1));
@@ -178,7 +214,7 @@ final class CssClass
 
         $out = [
             'media' => [], 'supports' => [], 'combinators' => [],
-            'pseudoClasses' => [], 'pseudoElement' => null,
+            'pseudoClasses' => [], 'pseudoSelectors' => [], 'pseudoElement' => null,
             'property' => $property,
             'propertyName' => $property?->css() ?? (string) $alias,
             'value' => $value,
@@ -191,12 +227,34 @@ final class CssClass
                 $out['supports'][] = $s;
             } elseif (($c = CssCombinator::tryFrom($token)) !== null) {
                 $out['combinators'][] = $c;
+            } elseif (($fn = self::functionalPseudo($token)) !== null) {
+                $out['pseudoSelectors'][] = $fn;
             } elseif (($e = self::pseudoElementFromToken($token)) !== null) {
                 $out['pseudoElement'] = $e;
             } elseif (($p = self::pseudoClassFromToken($token)) !== null) {
                 $out['pseudoClasses'][] = $p;
             } else {
                 throw new \InvalidArgumentException("unknown variant token '$token' in: $name");
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Build a stylesheet (concatenated rules) for a set of class names — the
+     * server-rendered `<style>` for the initial page. Names that aren't
+     * self-describing utilities (plain user classes) are skipped.
+     *
+     * @param iterable<string> $names
+     */
+    public static function sheet(iterable $names): string
+    {
+        $out = '';
+        foreach ($names as $name) {
+            try {
+                $out .= self::cssFor($name);
+            } catch (\InvalidArgumentException) {
+                // Not a utility class name — no rule to emit.
             }
         }
         return $out;
@@ -213,6 +271,9 @@ final class CssClass
         }
         foreach ($parts['pseudoClasses'] as $pc) {
             $sel .= $pc->css();
+        }
+        foreach ($parts['pseudoSelectors'] as $fn) {
+            $sel .= $fn;
         }
         if ($parts['pseudoElement'] !== null) {
             $sel .= $parts['pseudoElement']->css();
@@ -243,6 +304,19 @@ final class CssClass
     private static function decodeValue(string $payload): string
     {
         return str_replace('_', ' ', $payload);
+    }
+
+    /**
+     * Render a functional-pseudo token to its selector, or null if it isn't one.
+     * `has-[img]` → `:has(img)`, `nth-[2n]` → `:nth-child(2n)`, `not-[.x]` → `:not(.x)`.
+     */
+    private static function functionalPseudo(string $token): ?string
+    {
+        if (!preg_match('/^(has|nth|not)-\[(.+)\]$/', $token, $m)) {
+            return null;
+        }
+        $name = ['has' => ':has', 'nth' => ':nth-child', 'not' => ':not'][$m[1]];
+        return $name . '(' . $m[2] . ')';
     }
 
     private static function pseudoClassToken(CssPseudoClass $pc): string

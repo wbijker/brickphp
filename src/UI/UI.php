@@ -417,8 +417,14 @@ class UI
     // Style Output
     // ============================================================
 
+    /**
+     * Render a stylesheet from a set of self-describing class names (as returned
+     * by {@see \BrickPHP\UI\DomNode::collectStyles()}).
+     *
+     * @param array<string,mixed> $styles class-name set (keys are the names)
+     */
     public static function printStyles(array $styles): string
     {
-        return StyleGenerator::from($styles)->toCSS();
+        return \BrickPHP\Style\CssClass::sheet(array_keys($styles));
     }
 }

@@ -45,24 +45,18 @@ class ListDomNode extends TagDomNode
     }
 
     /**
-     * Collect all styles from this node and descendants.
-     * @return array<string, array<string, string>>
+     * The self-describing utility class names used by this node and its keyed
+     * children (a set, name => true).
+     *
+     * @return array<string, true>
      */
     public function collectStyles(): array
     {
-        $allStyles = $this->styles;
-
-        // Include CssStyle objects in legacy format
-        foreach ($this->cssStyles as $style) {
-            $legacy = $style->toLegacy();
-            $allStyles = array_merge($allStyles, $legacy);
-        }
-
+        $all = $this->utilityClasses;
         foreach ($this->keyedChildren as $keyed) {
-            $allStyles = array_merge($allStyles, $keyed->node->collectStyles());
+            $all += $keyed->node->collectStyles();
         }
-
-        return $allStyles;
+        return $all;
     }
 
     public function walkRegistrations(callable $visit): void
