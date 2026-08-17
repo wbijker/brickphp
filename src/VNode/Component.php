@@ -13,7 +13,9 @@ use BrickPHP\UI\TagDomNode;
  *
  * Inherits the basic render/created/shouldRender/finalize surface from
  * BaseComponent. Adds:
- *   - useState() / useGlobalState() / inject() / consume() — state and DI.
+ *   - useState() / inject() / consume() — state and DI. State that belongs to
+ *     the app rather than to a component is declared on the App instead, via
+ *     {@see App::registerGlobalState()}.
  *   - restored() / updated() / deleted() lifecycle hooks beyond created().
  *   - hasChanged() / captureStateSnapshot() — memoization helpers for
  *     overriding shouldRender().
@@ -23,9 +25,6 @@ abstract class Component extends BaseComponent
 {
     /** @var StateRef[] Registered state refs and their per-ref metadata */
     private array $stateRefs = [];
-
-    /** @var array<string, mixed> References to global state variables keyed by path key */
-    private array $globalStateRefs = [];
 
     /** @var StateManager|null Per-component state manager override */
     private ?StateManager $stateManager = null;
@@ -73,15 +72,6 @@ abstract class Component extends BaseComponent
             $this->hasBoundState = true;
         }
         $this->stateRefs[] = new StateRef($ref, $class, is_array($ref));
-    }
-
-    /**
-     * Register a variable as global state with a fixed path key.
-     * Multiple components can share the same global state by using the same key.
-     */
-    protected function useGlobalState(mixed &$ref, string $key): void
-    {
-        $this->globalStateRefs[$key] = &$ref;
     }
 
     /**
@@ -309,14 +299,6 @@ abstract class Component extends BaseComponent
             self::$newRegistry[$pathKey] = $this;
         }
 
-        // Restore global state
-        foreach ($this->globalStateRefs as $key => &$ref) {
-            $globalState = $resolved->getState($key);
-            if ($globalState !== null) {
-                $ref = $globalState;
-            }
-        }
-
         // Track current App instance for any framework hooks that need it.
         if ($this instanceof App) {
             self::$currentApp = $this;
@@ -425,11 +407,6 @@ abstract class Component extends BaseComponent
         $currentState = $this->getState();
         if (!empty($currentState)) {
             $resolved->saveState($pathKey, $currentState);
-        }
-
-        // Save global state
-        foreach ($this->globalStateRefs as $key => $ref) {
-            $resolved->saveState($key, $ref);
         }
     }
 }

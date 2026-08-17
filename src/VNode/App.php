@@ -4,7 +4,9 @@ namespace BrickPHP\VNode;
 
 use BrickPHP\Error\DefaultErrorPage;
 use BrickPHP\Error\ErrorInfo;
+use BrickPHP\State\GlobalStateManager;
 use BrickPHP\State\StateManager;
+use BrickPHP\UI\DomNode;
 use BrickPHP\UI\UIElement;
 
 abstract class App extends Component
@@ -20,6 +22,9 @@ abstract class App extends Component
 
     /** @var string[] External <link rel="stylesheet" href=...> URLs registered by components */
     private array $styles = [];
+
+    /** Bound once per app instance, on the first render — see {@see registerGlobalState()}. */
+    private ?GlobalStateManager $globalState = null;
 
     abstract public function title(): string;
 
@@ -145,6 +150,58 @@ abstract class App extends Component
     protected function build(): VNode
     {
         return $this->view();
+    }
+
+    /**
+     * Declare state that belongs to the application rather than to a component,
+     * by binding static properties:
+     *
+     *   protected function registerGlobalState(GlobalStateManager $manager): void
+     *   {
+     *       $manager->useState(Session::$userId);
+     *       $manager->useState(Session::$name);
+     *   }
+     *
+     * Every component in every tree then reads `Session::$name` directly — no
+     * prop to thread down, no key to spell, and the type is the property's own.
+     * The manager carries the same {@see GlobalStateManager::useState()} the
+     * components use, and the values are restored before the first render and
+     * saved with the rest of the state at the end of the request.
+     *
+     * See {@see GlobalStateManager} for the two rules that come with it:
+     * registration order is the storage contract, and every bound property
+     * needs a default.
+     */
+    protected function registerGlobalState(GlobalStateManager $manager): void
+    {
+    }
+
+    /**
+     * Bind and restore the app's global state, once per instance. Called at the
+     * top of render() so every phase — the initial GET, the OLD replay and the
+     * NEW render of a patch — starts from the stored values.
+     */
+    public function render(StateManager $state, ?VNode $parent = null, RenderPhase $phase = RenderPhase::Initial): DomNode
+    {
+        if ($this->globalState === null) {
+            $this->globalState = new GlobalStateManager($state);
+            $this->registerGlobalState($this->globalState);
+            $this->globalState->restore();
+        }
+
+        return parent::render($state, $parent, $phase);
+    }
+
+    /**
+     * The app's own state, plus the globals. Rides the existing save path:
+     * handleGet finalizes the app directly, and a POST reaches it through
+     * Component::finalizeAll(), so a handler's changes to a global are
+     * persisted wherever a component's own would be.
+     */
+    public function finalize(StateManager $state): void
+    {
+        parent::finalize($state);
+        $this->globalState?->save();
     }
 
     /**
