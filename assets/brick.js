@@ -935,7 +935,7 @@ var Brick = (function() {
     // patch; false makes the listener submit a full-page form POST. Tracked on
     // the element (keyed by domType+phase) so it can be unbound and is never
     // double-bound.
-    function bindEvent(path, domType, event, capture, client, keys) {
+    function bindEvent(path, domType, event, capture, client, keys, prevent) {
         var el = findNodeByPath(path);
         if (!el) return;
         el.__brickEvents = el.__brickEvents || {};
@@ -951,10 +951,63 @@ var Brick = (function() {
             // matching KeyboardEvent.key — other keys are dropped here and never
             // round-trip. Events that carry no `key` (e.g. change) are exempt.
             if (keys && keys.length && evt && typeof evt.key === 'string' && keys.indexOf(evt.key) < 0) return;
+            // A key the server claims is the server's: Tab must not also move
+            // focus, Escape must not also close a dialog underneath us.
+            if (prevent && evt && evt.preventDefault) evt.preventDefault();
             handleEvent(evt, event, el, client);
         };
         el.addEventListener(domType, fn, capture);
         el.__brickEvents[key] = fn;
+    }
+
+    // A listener that lives on `document` but answers for an element deeper in
+    // the tree: the key handler a screen wants to hear regardless of where
+    // focus currently is (Escape, a shortcut key), without every component
+    // having to sit in the focus path to receive it.
+    //
+    // The listener is attached to `document`, but dispatch reports the owning
+    // element's path, so the server resolves the same handler it would for a
+    // listener bound directly to that node. The element is looked up at
+    // dispatch time, not bind time — a patch can replace it in between.
+    var globalEvents = {};
+
+    function globalKey(path, domType, capture) {
+        return path.join(',') + '|' + domType + '|' + (capture ? 'c' : 'b');
+    }
+
+    function bindGlobalEvent(path, domType, event, capture, client, keys, prevent) {
+        var key = globalKey(path, domType, capture);
+        if (globalEvents[key]) return;
+        var fn = function (evt) {
+            if (keys && keys.length && evt && typeof evt.key === 'string' && keys.indexOf(evt.key) < 0) return;
+            var el = findNodeByPath(path);
+            if (!el) return;
+            if (prevent && evt && evt.preventDefault) evt.preventDefault();
+            handleEvent(evt, event, el, client);
+        };
+        document.addEventListener(domType, fn, capture);
+        globalEvents[key] = { fn: fn, domType: domType, capture: capture };
+    }
+
+    function unbindGlobalEvent(path, domType, capture) {
+        var key = globalKey(path, domType, capture);
+        var reg = globalEvents[key];
+        if (!reg) return;
+        document.removeEventListener(reg.domType, reg.fn, reg.capture);
+        delete globalEvents[key];
+    }
+
+    // Server-issued focus commands (BrickPHP\Js\Dom). `autofocus` covers the
+    // moment an element is inserted; these cover every moment after it, when
+    // the node survived the patch and the browser has no reason to move focus.
+    function focusElement(id) {
+        var el = document.getElementById(id);
+        if (el && el.focus) el.focus();
+    }
+
+    function blurElement(id) {
+        var el = document.getElementById(id);
+        if (el && el.blur && document.activeElement === el) el.blur();
     }
 
     // Detach a previously bound listener from a surviving element.
@@ -1041,6 +1094,10 @@ var Brick = (function() {
         dispatch: dispatch,
         bindEvent: bindEvent,
         unbindEvent: unbindEvent,
+        bindGlobalEvent: bindGlobalEvent,
+        unbindGlobalEvent: unbindGlobalEvent,
+        focusElement: focusElement,
+        blurElement: blurElement,
         ready: ready
     };
 })();
