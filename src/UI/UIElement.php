@@ -18,7 +18,9 @@ use BrickPHP\Events\WheelEvent;
 use BrickPHP\Events\Events;
 use BrickPHP\Events\EventPhase;
 use BrickPHP\Events\EventRegistration;
+use BrickPHP\Events\GlobalEventRegistration;
 use BrickPHP\Events\Key;
+use BrickPHP\Events\NativeEventRegistration;
 use BrickPHP\State\StateManager;
 use BrickPHP\VNode\Component;
 use BrickPHP\VNode\Node;
@@ -406,9 +408,52 @@ class UIElement extends Node
      *   is ignored without a server request. Pass {@see Key} cases (e.g.
      *   `[Key::Enter, Key::Escape]`) or raw `KeyboardEvent.key` strings.
      */
-    public function onKeyDown(callable $callback, array $keys = [], EventPhase $phase = EventPhase::Bubble, bool $client = true): static
+    public function onKeyDown(callable $callback, array $keys = [], EventPhase $phase = EventPhase::Bubble, bool $client = true, bool $preventDefault = false): static
     {
-        $this->dom()->on(Events::KEY_DOWN, $callback, null, null, $phase, $client, self::keyValues($keys));
+        $registration = $preventDefault
+            ? new NativeEventRegistration(Events::KEY_DOWN, 'keydown', $phase, $client, self::keyValues($keys), true)
+            : null;
+        $this->dom()->on(Events::KEY_DOWN, $callback, null, $registration, $phase, $client, self::keyValues($keys));
+        return $this;
+    }
+
+    /**
+     * A key handler that listens on the document rather than on this element,
+     * so it fires wherever focus is — the screen-level shortcut (Escape to go
+     * back, a hotkey to skip) that would otherwise only work while this
+     * element happened to hold focus.
+     *
+     * It is still this element's handler: the dispatch carries this node's
+     * path, so the server resolves the callback exactly as it would for
+     * {@see onKeyDown()}, and the listener is bound and unbound by the diff
+     * as this element enters and leaves the tree. Put it on the component
+     * that owns the behaviour, and it lives and dies with that component.
+     *
+     * @param callable(KeyboardEvent): void $callback
+     * @param array<Key|string> $keys Client-side key filter (see {@see onKeyDown()}).
+     *   Worth being specific: an unfiltered global listener round-trips on
+     *   every keystroke anywhere on the page.
+     * @param bool $preventDefault Suppress the browser's own reaction to the
+     *   key before dispatching — needed for keys the browser already uses
+     *   (Tab moves focus, Escape closes things).
+     */
+    public function onGlobalKeyDown(
+        callable $callback,
+        array $keys = [],
+        bool $preventDefault = false,
+        EventPhase $phase = EventPhase::Bubble,
+        bool $client = true,
+    ): static
+    {
+        $registration = new GlobalEventRegistration(
+            Events::KEY_DOWN,
+            'keydown',
+            $phase,
+            $client,
+            self::keyValues($keys),
+            $preventDefault,
+        );
+        $this->dom()->on(Events::KEY_DOWN, $callback, null, $registration, $phase, $client, self::keyValues($keys));
         return $this;
     }
 

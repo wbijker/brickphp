@@ -38,6 +38,7 @@ final class NativeEventRegistration implements EventRegistration
         private EventPhase $phase,
         private bool       $client = true,
         private array      $keys = [],
+        private bool       $preventDefault = false,
     ) {
     }
 
@@ -56,6 +57,7 @@ final class NativeEventRegistration implements EventRegistration
             $this->phase->useCapture(),
             $this->client,
             $this->keys,
+            $this->preventDefault,
         ));
     }
 
